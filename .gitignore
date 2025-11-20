@@ -1,0 +1,38 @@
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Node.js dependencies and build artifacts
+node_modules/
+dist/
+build/
+.cache/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.Python
+.venv/
+venv/
+env/
+
+# Environment files
+.env
+.env.*
+*.local
+
+# Logs
+*.log
+
+# IDE/editor directories
+.idea/
+.vscode/
+*.swp
+*.swo
+
