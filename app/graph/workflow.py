@@ -4,7 +4,7 @@ LangGraph workflow construction.
 
 from __future__ import annotations
 
-from langgraph.graph import StateGraph, END
+from langgraph.graph import END, StateGraph
 
 from app.agents import (
     AssetDetailsAgent,
@@ -25,31 +25,51 @@ clarify_agent = ClarificationAgent()
 def build_workflow() -> StateGraph:
     graph = StateGraph(GraphState)
 
-    graph.add_node("classify", _classify_node)
+    graph.add_node("supervisor", _classify_node)
     graph.add_node("price_comparison", _price_node)
     graph.add_node("pnl", _pnl_node)
     graph.add_node("asset_details", _asset_node)
     graph.add_node("clarification", _clarification_node)
 
-    graph.add_edge("classify", "price_comparison")
-    graph.add_edge("classify", "pnl")
-    graph.add_edge("classify", "asset_details")
-    graph.add_edge("classify", "clarification")
+    graph.add_conditional_edges(
+        "supervisor",
+        _route_from_supervisor,
+        {
+            "price_comparison": "price_comparison",
+            "pnl": "pnl",
+            "asset_details": "asset_details",
+            "clarification": "clarification",
+            "general": "clarification",
+        },
+    )
     graph.add_edge("price_comparison", END)
     graph.add_edge("pnl", END)
     graph.add_edge("asset_details", END)
     graph.add_edge("clarification", END)
 
-    graph.set_entry_point("classify")
+    graph.set_entry_point("supervisor")
     return graph
 
 
 def _classify_node(state: GraphState) -> GraphState:
     state.log("Supervisor classification started")
-    req_type = supervisor.classify(state.context.user_input)
-    state.context.request_type = req_type
-    state.log("Supervisor classification complete", request_type=req_type)
+    decision = supervisor.analyze(state.context.user_input)
+    state.context.request_type = decision.request_type
+    state.context.addresses = decision.addresses
+    state.context.period = decision.period
+    state.log(
+        "Supervisor classification complete",
+        request_type=decision.request_type,
+        addresses=decision.addresses,
+        period=decision.period,
+    )
     return state
+
+
+def _route_from_supervisor(state: GraphState) -> str:
+    destination = state.context.request_type or "clarification"
+    state.log("Routing to specialist", destination=destination)
+    return destination
 
 
 def _price_node(state: GraphState) -> GraphState:

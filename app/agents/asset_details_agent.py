@@ -8,7 +8,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict
 
-from app.data_layer import load_assets
+from app import tools
 
 logger = logging.getLogger(__name__)
 
@@ -21,15 +21,7 @@ class AssetDetailsAgent:
 
     def run(self, address: str) -> Dict[str, Any]:
         logger.info("AssetDetailsAgent invoked for address contains '%s'", address)
-        df = load_assets()
-        if "address" not in df.columns:
-            raise ValueError("Dataset missing 'address' column required for lookups.")
-
-        match = df[df["address"].str.contains(address, case=False, na=False)]
-        if match.empty:
-            raise ValueError(f"Address '{address}' not found.")
-
-        record = match.iloc[0].to_dict()
+        record = tools.get_asset_snapshot(address)
         logger.info("AssetDetailsAgent returning record for %s", record.get("address", "unknown"))
         return record
 
