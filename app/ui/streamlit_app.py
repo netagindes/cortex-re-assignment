@@ -11,6 +11,7 @@ import streamlit as st
 
 # API URL provided via environment (docker-compose) or default localhost
 API_URL = os.getenv("API_URL", "http://localhost:8000")
+_PLACEHOLDER_NOTE = "Agent orchestration not yet wired to this endpoint."
 
 
 def main() -> None:
@@ -59,9 +60,14 @@ def _call_api(message: str) -> tuple[str, list[str]]:
             data = response.json()
             base = data.get("response", "No response received.")
             note = data.get("note")
-            logs = data.get("logs") or []
-            reply = f"{base}\n\n_{note}_" if note else base
-            return reply, logs
+            if isinstance(note, str) and note.strip() == _PLACEHOLDER_NOTE:
+                note = None
+            logs = list(data.get("logs") or [])
+            if not logs:
+                logs = ["Processing steps are not available for this request."]
+            if note:
+                logs.append(f"Note: {note}")
+            return base, logs
     except httpx.RequestError as exc:
         return (f"Failed to reach API: {exc}", [f"RequestError: {exc}"])
     except httpx.HTTPStatusError as exc:
