@@ -3,6 +3,7 @@ from __future__ import annotations
 import getpass
 import os
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -15,6 +16,7 @@ def find_project_root(start: Path) -> Path:
 
 
 PROJECT_ROOT = find_project_root(Path(__file__).resolve())
+
 ENV_PATH = PROJECT_ROOT / ".env"
 
 
@@ -41,8 +43,11 @@ def require_file(path: Path) -> Path:
 if __name__ == "__main__":
     print(f"Project root: {PROJECT_ROOT}")
     print(f"Env path: {ENV_PATH}")
+
     load_env()
+
     _set_if_undefined("OPENAI_API_KEY")
     _set_if_undefined("GEMINI_API_KEY")
     # _set_if_undefined("ANTHROPIC_API_KEY")
     # _set_if_undefined("TAVILY_API_KEY")
+
