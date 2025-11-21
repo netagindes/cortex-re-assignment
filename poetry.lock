@@ -746,14 +746,14 @@ ormsgpack = ">=1.12.0"
 
 [[package]]
 name = "langgraph-prebuilt"
-version = "1.0.4"
+version = "1.0.5"
 description = "Library with high-level APIs for creating and executing LangGraph agents and tools."
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "langgraph_prebuilt-1.0.4-py3-none-any.whl", hash = "sha256:50b1aa2b434783b6da30785568cf7155136b484750cc2ec695c0d4255db08262"},
-    {file = "langgraph_prebuilt-1.0.4.tar.gz", hash = "sha256:7b4f9e97a146d2d625695c3549bdb432974b80817165139ec2ec869721e72c0f"},
+    {file = "langgraph_prebuilt-1.0.5-py3-none-any.whl", hash = "sha256:22369563e1848862ace53fbc11b027c28dd04a9ac39314633bb95f2a7e258496"},
+    {file = "langgraph_prebuilt-1.0.5.tar.gz", hash = "sha256:85802675ad778cc7240fd02d47db1e0b59c0c86d8369447d77ce47623845db2d"},
 ]
 
 [package.dependencies]
@@ -778,14 +778,14 @@ orjson = ">=3.10.1"
 
 [[package]]
 name = "langsmith"
-version = "0.4.44"
+version = "0.4.45"
 description = "Client library to connect to the LangSmith Observability and Evaluation Platform."
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "langsmith-0.4.44-py3-none-any.whl", hash = "sha256:c249ed6cac490723ec7201debd9e3bc3b2a0bf54ff99aba89a135c9d78c83233"},
-    {file = "langsmith-0.4.44.tar.gz", hash = "sha256:5314280e0647085c1a9cc2219361fa7c2aa6cb5921558bddf3afe86d55a512cc"},
+    {file = "langsmith-0.4.45-py3-none-any.whl", hash = "sha256:6326ad2e66c24d47361b4338fbc23e7fee8da624b289921a9c164e15217ed8e2"},
+    {file = "langsmith-0.4.45.tar.gz", hash = "sha256:f73f86353e31e8f89da2da2b1ebf9f695227f394d22df3ef5d7618e59738bd71"},
 ]
 
 [package.dependencies]

@@ -30,6 +30,7 @@ env/
 # Logs
 *.log
 *.txt
+!requirements.txt
 
 # IDE/editor directories
 .idea/

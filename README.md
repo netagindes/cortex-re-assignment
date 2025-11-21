@@ -30,13 +30,19 @@ real_estate_agent/
 ## Getting Started
 
 ```bash
-poetry install
+python -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
 
 # Terminal 1 - FastAPI service
-poetry run uvicorn app.api.main:app --reload
+uvicorn app.api.main:app --reload
 
 # Terminal 2 - Streamlit UI (speaks to API_URL)
-API_URL=http://localhost:8000 poetry run streamlit run app/ui/streamlit_app.py
+API_URL=http://localhost:8000 streamlit run app/ui/streamlit_app.py
+
+# Run tests
+python -m pytest
 ```
 
 ### Docker Compose
