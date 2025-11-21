@@ -29,10 +29,14 @@ env/
 
 # Logs
 *.log
+*.txt
 
 # IDE/editor directories
 .idea/
 .vscode/
 *.swp
 *.swo
+
+# Streamlit logs
+streamlit.log
 
