@@ -4,9 +4,11 @@ Supervisor agent responsible for classifying and routing user queries.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Literal
 
+logger = logging.getLogger(__name__)
 
 RequestType = Literal["price_comparison", "pnl", "asset_details", "general", "clarification"]
 
@@ -20,14 +22,17 @@ class SupervisorAgent:
     def classify(self, user_input: str) -> RequestType:
         text = user_input.lower()
         if "compare" in text or "price" in text:
-            return "price_comparison"
-        if "p&l" in text or "profit" in text:
-            return "pnl"
-        if "detail" in text or "tell me about" in text:
-            return "asset_details"
-        if len(user_input.strip()) < 5:
-            return "clarification"
-        return "general"
+            classification = "price_comparison"
+        elif "p&l" in text or "profit" in text:
+            classification = "pnl"
+        elif "detail" in text or "tell me about" in text:
+            classification = "asset_details"
+        elif len(user_input.strip()) < 5:
+            classification = "clarification"
+        else:
+            classification = "general"
+        logger.info("Supervisor classified '%s' as %s", user_input, classification)
+        return classification
 
 
 __all__ = ["SupervisorAgent", "RequestType"]

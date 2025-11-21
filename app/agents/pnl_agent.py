@@ -4,6 +4,7 @@ Agent responsible for profit & loss aggregation.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict
 
@@ -11,6 +12,8 @@ import pandas as pd
 
 from app.data_layer import load_assets
 from app.tools import format_currency
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -20,6 +23,7 @@ class PnLAgent:
     """
 
     def run(self, period: str | None = None) -> Dict[str, Any]:
+        logger.info("PnLAgent invoked for period=%s", period or "all")
         df = load_assets()
         if "pnl" not in df.columns:
             raise ValueError("Dataset missing 'pnl' column required for this agent.")
@@ -31,6 +35,7 @@ class PnLAgent:
             "formatted": format_currency(total_pnl),
             "record_count": len(df),
         }
+        logger.info("PnLAgent total pnl=%s over %s assets", total_pnl, len(df))
         return response
 
 

@@ -5,7 +5,10 @@ Shared state definitions flowing through the LangGraph workflow.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+
+from app.logging_utils import PipelineLogEntry, PipelineLogger
 
 
 @dataclass
@@ -20,7 +23,23 @@ class QueryContext:
 class GraphState:
     context: QueryContext
     result: Optional[Dict[str, Any]] = None
-    diagnostics: List[str] = field(default_factory=list)
+    diagnostics: List[PipelineLogEntry] = field(default_factory=list)
+    logger: PipelineLogger | None = field(default=None, repr=False)
+
+    def log(self, message: str, *, level: str = "info", **metadata: Any) -> None:
+        entry = PipelineLogEntry(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            level=level.upper(),
+            message=message,
+            metadata=metadata or None,
+        )
+        self.diagnostics.append(entry)
+        if self.logger:
+            log_method = getattr(self.logger, level, self.logger.info)
+            log_method(message, **metadata)
+
+    def diagnostics_as_text(self) -> List[str]:
+        return [entry.as_text() for entry in self.diagnostics]
 
 
 __all__ = ["QueryContext", "GraphState"]

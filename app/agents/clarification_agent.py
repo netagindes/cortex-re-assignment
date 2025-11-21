@@ -2,8 +2,11 @@
 Agent prompting users for additional details when the query is ambiguous.
 """
 
+import logging
 from dataclasses import dataclass
 from typing import Dict
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -13,6 +16,7 @@ class ClarificationAgent:
     """
 
     def run(self, user_input: str) -> Dict[str, str]:
+        logger.info("ClarificationAgent invoked for query '%s'", user_input)
         return {
             "message": (
                 "I need a bit more information to help you. "

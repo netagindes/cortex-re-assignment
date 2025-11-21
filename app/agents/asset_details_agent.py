@@ -4,10 +4,13 @@ Agent returning detailed information about a single asset.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
-from typing import Dict, Any
+from typing import Any, Dict
 
 from app.data_layer import load_assets
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -17,6 +20,7 @@ class AssetDetailsAgent:
     """
 
     def run(self, address: str) -> Dict[str, Any]:
+        logger.info("AssetDetailsAgent invoked for address contains '%s'", address)
         df = load_assets()
         if "address" not in df.columns:
             raise ValueError("Dataset missing 'address' column required for lookups.")
@@ -25,7 +29,9 @@ class AssetDetailsAgent:
         if match.empty:
             raise ValueError(f"Address '{address}' not found.")
 
-        return match.iloc[0].to_dict()
+        record = match.iloc[0].to_dict()
+        logger.info("AssetDetailsAgent returning record for %s", record.get("address", "unknown"))
+        return record
 
 
 __all__ = ["AssetDetailsAgent"]
