@@ -1,0 +1,14 @@
+[
+	{"column_name":"entity_name","column_type":"VARCHAR","null":"YES","key":null,"default":null,"extra":null},
+	{"column_name":"property_name","column_type":"VARCHAR","null":"YES","key":null,"default":null,"extra":null},
+	{"column_name":"tenant_name","column_type":"VARCHAR","null":"YES","key":null,"default":null,"extra":null},
+	{"column_name":"ledger_type","column_type":"VARCHAR","null":"YES","key":null,"default":null,"extra":null},
+	{"column_name":"ledger_group","column_type":"VARCHAR","null":"YES","key":null,"default":null,"extra":null},
+	{"column_name":"ledger_category","column_type":"VARCHAR","null":"YES","key":null,"default":null,"extra":null},
+	{"column_name":"ledger_code","column_type":"INTEGER","null":"YES","key":null,"default":null,"extra":null},
+	{"column_name":"ledger_description","column_type":"VARCHAR","null":"YES","key":null,"default":null,"extra":null},
+	{"column_name":"month","column_type":"VARCHAR","null":"YES","key":null,"default":null,"extra":null},
+	{"column_name":"quarter","column_type":"VARCHAR","null":"YES","key":null,"default":null,"extra":null},
+	{"column_name":"year","column_type":"VARCHAR","null":"YES","key":null,"default":null,"extra":null},
+	{"column_name":"profit","column_type":"DOUBLE","null":"YES","key":null,"default":null,"extra":null}
+]

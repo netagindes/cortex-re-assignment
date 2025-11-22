@@ -127,7 +127,7 @@ def pnl_by_property(rows: pd.DataFrame, limit: int = 5) -> List[Dict[str, Any]]:
 
 
 def compute_portfolio_pnl(period: Optional[str] = None) -> Dict[str, Any]:
-    filters = {"period": period} if period else None
+    filters = {"year": period} if period else None
     rows = get_ledger_rows(filters)
     total = calculate_pnl(rows)
     breakdown = pnl_by_property(rows)
@@ -153,8 +153,8 @@ def compute_portfolio_pnl(period: Optional[str] = None) -> Dict[str, Any]:
 
 def get_asset_value(address: str) -> float:
     record = _lookup_asset(address)
-    if "price" not in record:
-        raise ValueError("Dataset missing 'price' column.")
+    if "price" not in record.index:
+        raise ValueError("Price data is not available in the current dataset.")
     return float(record["price"])
 
 
@@ -185,7 +185,7 @@ def get_asset_value_history(address: str, limit: int = 4) -> List[Dict[str, Any]
     rows = df[df["address"].str.contains(address, case=False, na=False)]
     if rows.empty:
         return []
-    cols = [col for col in ("year", "quarter", "month", "price") if col in rows.columns]
+    cols = [col for col in ("year", "quarter", "month", "price", "pnl") if col in rows.columns]
     return rows.sort_values(by=[col for col in ("year", "quarter", "month") if col in cols]).tail(limit)[
         cols
     ].to_dict(orient="records")

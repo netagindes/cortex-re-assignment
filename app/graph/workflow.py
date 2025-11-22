@@ -81,7 +81,12 @@ def _price_node(state: GraphState) -> GraphState:
         }
         state.log("Price comparison skipped due to insufficient addresses")
         return state
-    state.result = price_agent.run(addresses[0], addresses[1])
+    try:
+        state.result = price_agent.run(addresses[0], addresses[1])
+    except ValueError as exc:
+        state.result = {"message": str(exc)}
+        state.log("Price comparison failed", error=str(exc))
+        return state
     state.log(
         "Price comparison completed",
         property_a=state.result["property_a"]["address"],
@@ -93,7 +98,12 @@ def _price_node(state: GraphState) -> GraphState:
 
 def _pnl_node(state: GraphState) -> GraphState:
     state.log("PnL node entered", period=state.context.period)
-    state.result = pnl_agent.run(state.context.period)
+    try:
+        state.result = pnl_agent.run(state.context.period)
+    except ValueError as exc:
+        state.result = {"message": str(exc)}
+        state.log("PnL aggregation failed", error=str(exc))
+        return state
     state.log("PnL aggregation completed", total=state.result["value"])
     return state
 
@@ -104,7 +114,12 @@ def _asset_node(state: GraphState) -> GraphState:
         state.result = {"message": "Please include the property address you want details about."}
         state.log("Asset detail lookup skipped - no address provided")
         return state
-    state.result = asset_agent.run(state.context.addresses[0])
+    try:
+        state.result = asset_agent.run(state.context.addresses[0])
+    except ValueError as exc:
+        state.result = {"message": str(exc)}
+        state.log("Asset detail lookup failed", error=str(exc))
+        return state
     state.log("Asset detail lookup completed", address=state.context.addresses[0])
     return state
 

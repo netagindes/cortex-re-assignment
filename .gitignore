@@ -41,3 +41,4 @@ env/
 # Streamlit logs
 streamlit.log
 
+/app/graph/test_supervisor.py

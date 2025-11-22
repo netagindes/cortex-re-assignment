@@ -6,14 +6,14 @@ from __future__ import annotations
 
 import uuid
 from contextlib import asynccontextmanager
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Mapping, Tuple
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from app.graph.state import GraphState, QueryContext
 from app.graph.workflow import build_workflow
-from app.logging_utils import PipelineLogger, setup_logging
+from app.logging_utils import PipelineLogEntry, PipelineLogger, setup_logging
 from app.tools import format_currency
 
 setup_logging()
@@ -55,12 +55,13 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
 
     request_id = str(uuid.uuid4())
     pipeline_logger = PipelineLogger("api.chat", context={"request_id": request_id})
-    pipeline_logger.info("Received chat request", message=payload.message)
+    pipeline_logger.info("Received chat request", user_message=payload.message)
 
     context = QueryContext(user_input=payload.message, request_type="general")
     state = GraphState(context=context, logger=pipeline_logger)
 
-    result_state: GraphState = compiled_workflow.invoke(state)
+    raw_state = compiled_workflow.invoke(state)
+    result_state = _ensure_graph_state(raw_state, pipeline_logger)
     response_text, note = _format_response(result_state)
 
     pipeline_logger.info("Responding to client", note=note)
@@ -69,6 +70,56 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
         note=note,
         logs=pipeline_logger.as_text_lines(),
     )
+
+
+def _ensure_graph_state(
+    state_like: GraphState | Mapping[str, Any],
+    logger: PipelineLogger,
+) -> GraphState:
+    if isinstance(state_like, GraphState):
+        if state_like.logger is None:
+            state_like.logger = logger
+        return state_like
+
+    if not isinstance(state_like, Mapping):
+        raise TypeError("Workflow returned an unexpected state type.")
+
+    context = state_like.get("context")
+    if isinstance(context, dict):
+        try:
+            user_input = context["user_input"]
+            request_type = context["request_type"]
+        except KeyError as exc:
+            raise ValueError("Workflow state context is missing required fields.") from exc
+        context = QueryContext(
+            user_input=user_input,
+            request_type=request_type,
+            addresses=list(context.get("addresses") or []),
+            period=context.get("period"),
+        )
+    if not isinstance(context, QueryContext):
+        raise TypeError("Workflow returned state without a valid context.")
+
+    diagnostics = _normalize_diagnostics(state_like.get("diagnostics"))
+
+    return GraphState(
+        context=context,
+        result=state_like.get("result"),
+        diagnostics=diagnostics,
+        logger=logger,
+    )
+
+
+def _normalize_diagnostics(entries: Any) -> List[PipelineLogEntry]:
+    if not entries:
+        return []
+    normalized: List[PipelineLogEntry] = []
+    for entry in entries:
+        if isinstance(entry, PipelineLogEntry):
+            normalized.append(entry)
+        elif isinstance(entry, dict):
+            normalized.append(PipelineLogEntry(**entry))
+    return normalized
 
 
 def _format_response(state: GraphState) -> Tuple[str, str | None]:
@@ -119,4 +170,3 @@ def _format_response(state: GraphState) -> Tuple[str, str | None]:
         "I wasn't able to match your request to a known operation. Please provide more details.",
         None,
     )
-

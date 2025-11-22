@@ -11,16 +11,26 @@ logger = logging.getLogger(__name__)
 DATA_DIR = PROJECT_ROOT / "data"
 ASSETS_DATA_PATH = DATA_DIR / "assets.parquet"
 
+_COLUMN_RENAMES = {
+    "property_name": "address",
+    "profit": "pnl",
+    "entity_name": "entity",
+    "ledger_type": "type",
+    "ledger_group": "group",
+    "ledger_category": "category",
+    "ledger_code": "code",
+    "ledger_description": "description",
+}
 
-# TODO: Create data type and Schema validation for the assets dataset
-# @lru_cache(maxsize=1)
-# def _read_assets(columns: Optional[Iterable[str]] = None) -> pd.DataFrame:
-#     """
-#     Internal cached reader for the assets parquet file.
-#     """
-#
-#     path = require_file(ASSETS_DATA_PATH)
-#     return pd.read_parquet(path, columns=list(columns) if columns else None)
+
+def _normalize_dataset(df: pd.DataFrame) -> pd.DataFrame:
+    rename_map = {src: dst for src, dst in _COLUMN_RENAMES.items() if src in df.columns}
+    if rename_map:
+        df = df.rename(columns=rename_map)
+    if "year" in df.columns and "period" not in df.columns:
+        df["period"] = df["year"].astype(str)
+    return df
+
 
 @lru_cache(maxsize=1)
 def _read_all_assets() -> pd.DataFrame:
@@ -30,19 +40,8 @@ def _read_all_assets() -> pd.DataFrame:
 
     path = require_file(ASSETS_DATA_PATH)
     logger.info("Reading full assets dataset from %s", path)
-    return pd.read_parquet(path)
-
-
-def _read_assets(columns: Optional[Iterable[str]] = None) -> pd.DataFrame:
-    """
-    Read the dataset, optionally selecting a subset of columns (uncached).
-    """
-
-    path = require_file(ASSETS_DATA_PATH)
-    column_list = list(columns) if columns else None
-    if column_list:
-        logger.info("Reading asset columns %s from %s", column_list, path)
-    return pd.read_parquet(path, columns=column_list)
+    raw = pd.read_parquet(path)
+    return _normalize_dataset(raw)
 
 
 def load_assets(refresh: bool = False, columns: Optional[Iterable[str]] = None) -> pd.DataFrame:
@@ -54,13 +53,19 @@ def load_assets(refresh: bool = False, columns: Optional[Iterable[str]] = None) 
         logger.info("Clearing cached assets dataframe")
         _read_all_assets.cache_clear()
 
+    df = _read_all_assets().copy()
     if columns:
-        df = _read_assets(columns=columns)
-    else:
-        df = _read_all_assets()
+        column_list = [col for col in columns if col in df.columns]
+        missing = [col for col in columns if col not in df.columns]
+        if missing:
+            logger.warning("Requested columns %s missing from dataset", missing)
+        if column_list:
+            df = df[column_list]
+        else:
+            return pd.DataFrame()
 
     logger.info("Loaded %s asset records", len(df))
-    return df.copy()
+    return df
 
 
 def summarize_assets(df: pd.DataFrame) -> dict:
