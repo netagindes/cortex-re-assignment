@@ -4,6 +4,10 @@ LangGraph workflow construction.
 
 from __future__ import annotations
 
+import re
+
+from typing import Any, Dict
+
 from langgraph.graph import END, StateGraph
 
 from app.agents import (
@@ -20,6 +24,10 @@ pnl_agent = PnLAgent()
 price_agent = PriceComparisonAgent()
 asset_agent = AssetDetailsAgent()
 clarify_agent = ClarificationAgent()
+
+_YEAR_PATTERN = re.compile(r"^\d{4}$")
+_QUARTER_PATTERN = re.compile(r"^\d{4}-Q[1-4]$", re.IGNORECASE)
+_MONTH_PATTERN = re.compile(r"^\d{4}-M\d{2}$", re.IGNORECASE)
 
 
 def build_workflow() -> StateGraph:
@@ -120,13 +128,54 @@ def _pnl_node(state: GraphState) -> GraphState:
         state.log("PnL aggregation skipped - clarification required")
         return state
     try:
-        state.result = pnl_agent.run(state.context.period)
+        task = _build_pnl_task(state.context)
+        state.result = pnl_agent.run(task)
+        state.pnl_result = state.result
     except ValueError as exc:
         state.result = {"message": str(exc)}
         state.log("PnL aggregation failed", error=str(exc))
         return state
     state.log("PnL aggregation completed", total=state.result["value"])
     return state
+
+
+def _build_pnl_task(context: QueryContext) -> Dict[str, Any]:
+    year = context.year
+    quarter = context.quarter
+    month = context.month
+    label = context.period
+
+    if label:
+        if year is None and _YEAR_PATTERN.match(label):
+            year = int(label)
+        elif _QUARTER_PATTERN.match(label):
+            normalized = label.upper()
+            quarter = quarter or normalized
+            year = year or int(normalized[:4])
+        elif _MONTH_PATTERN.match(label):
+            normalized = label.upper()
+            month = month or normalized
+            year = year or int(normalized[:4])
+
+    level = context.period_level
+    if level is None:
+        if month:
+            level = "month"
+        elif quarter:
+            level = "quarter"
+        else:
+            level = "year"
+
+    return {
+        "entity_name": context.entity_name,
+        "property_name": context.property_name,
+        "tenant_name": context.tenant_name,
+        "year": year,
+        "quarter": quarter.upper() if isinstance(quarter, str) else quarter,
+        "month": month.upper() if isinstance(month, str) else month,
+        "level": level,
+        "label": label,
+    }
 
 
 def _asset_node(state: GraphState) -> GraphState:

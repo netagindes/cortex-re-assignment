@@ -8,7 +8,7 @@ import re
 from datetime import datetime
 from difflib import get_close_matches
 from functools import lru_cache
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Literal, Optional, Sequence
 
 import pandas as pd
 
@@ -228,58 +228,236 @@ def _lookup_asset(address_query: str, df: Optional[pd.DataFrame] = None) -> pd.S
 # PnL toolkit
 # --------------------------------------------------------------------------------------
 
+PeriodLevel = Literal["month", "quarter", "year"]
 
-def get_ledger_rows(filters: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
+
+def filter_ledger(
+    *,
+    entity_name: Optional[str] = None,
+    property_name: Optional[str] = None,
+    tenant_name: Optional[str] = None,
+    year: Optional[int] = None,
+    quarter: Optional[str] = None,
+    month: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    Filter the ledger rows according to the provided dimensions.
+    """
+
     df = load_assets()
-    if not filters:
-        return df
-    mask = pd.Series([True] * len(df), index=df.index)
-    for column, value in (filters or {}).items():
-        if not value or column not in df.columns:
-            continue
-        mask &= df[column].astype(str).str.contains(str(value), case=False, na=False)
-    return df[mask]
+    mask = pd.Series(True, index=df.index)
+
+    def _apply(column: str, value: Optional[str]) -> None:
+        nonlocal mask
+        if value is None or column not in df.columns:
+            return
+        mask &= df[column].astype(str).str.lower() == str(value).lower()
+
+    if entity_name:
+        col = "entity" if "entity" in df.columns else "entity_name"
+        _apply(col, entity_name)
+    if property_name:
+        _apply("property_name", property_name)
+    if tenant_name:
+        _apply("tenant_name", tenant_name)
+    if year is not None and "year" in df.columns:
+        mask &= df["year"].astype("Int64") == int(year)
+    if quarter and "quarter" in df.columns:
+        _apply("quarter", quarter)
+    if month and "month" in df.columns:
+        _apply("month", month)
+
+    return df[mask].copy()
 
 
-def aggregate_by_category(rows: pd.DataFrame, category: str = "category") -> List[Dict[str, Any]]:
-    if category not in rows.columns or "pnl" not in rows.columns:
-        return []
-    grouped = rows.groupby(category)["pnl"].sum().sort_values(ascending=False)
-    return [
-        {"category": name, "pnl": float(value), "formatted": format_currency(float(value))}
-        for name, value in grouped.items()
-    ]
+def aggregate_pnl(
+    df: pd.DataFrame,
+    *,
+    period_level: PeriodLevel = "month",
+    include_breakdown: bool = True,
+) -> Dict[str, Any]:
+    """
+    Aggregate a filtered ledger DataFrame into P&L metrics.
+    """
 
+    if df.empty:
+        return {"totals": pd.DataFrame(), "breakdown": None}
 
-def calculate_pnl(rows: pd.DataFrame) -> float:
-    _require_columns(rows, ["pnl"])
-    return float(rows["pnl"].sum())
+    period_column_map = {
+        "month": "month",
+        "quarter": "quarter",
+        "year": "year",
+    }
+    period_col = period_column_map[period_level]
+    base_group = []
+    for column in ("entity", "property_name", period_col):
+        if column in df.columns:
+            base_group.append(column)
+
+    breakdown_group = list(base_group)
+    for column in ("type", "group", "category"):
+        if column in df.columns:
+            breakdown_group.append(column)
+
+    breakdown_df = None
+    if include_breakdown and breakdown_group:
+        breakdown_df = (
+            df.groupby(breakdown_group, dropna=False)["pnl"]
+            .sum()
+            .reset_index()
+            .rename(columns={"pnl": "amount"})
+        )
+
+    ledger_totals = (
+        df.groupby(base_group + ["type"], dropna=False)["pnl"]
+        .sum()
+        .reset_index()
+        .rename(columns={"pnl": "amount"})
+    )
+
+    pivot = (
+        ledger_totals.pivot_table(
+            index=base_group,
+            columns="type",
+            values="amount",
+            fill_value=0.0,
+        )
+        .reset_index()
+    )
+    pivot["total_revenue"] = pivot.get("revenue", 0.0)
+    pivot["total_expenses"] = pivot.get("expenses", 0.0)
+    pivot["net_operating_income"] = pivot["total_revenue"] + pivot["total_expenses"]
+
+    return {
+        "totals": pivot,
+        "breakdown": breakdown_df,
+    }
 
 
 def pnl_by_property(rows: pd.DataFrame, limit: int = 5) -> List[Dict[str, Any]]:
-    if "address" not in rows.columns or "pnl" not in rows.columns:
+    if rows.empty or "pnl" not in rows.columns:
         return []
-    ranked = rows.groupby("address")["pnl"].sum().sort_values(ascending=False).head(limit)
-    return [{"address": address, "pnl": float(value)} for address, value in ranked.items()]
+    column = "address" if "address" in rows.columns else "property_name"
+    if column not in rows.columns:
+        return []
+    ranked = rows.groupby(column)["pnl"].sum().sort_values(ascending=False).head(limit)
+    return [{"address": address or "Portfolio", "pnl": float(value)} for address, value in ranked.items()]
 
 
-def compute_portfolio_pnl(period: Optional[str] = None) -> Dict[str, Any]:
-    filters = {"year": period} if period else None
-    rows = get_ledger_rows(filters)
-    total = calculate_pnl(rows)
-    breakdown = pnl_by_property(rows)
-    categories = aggregate_by_category(rows)
+def _infer_period_level(year: Optional[int], quarter: Optional[str], month: Optional[str]) -> PeriodLevel:
+    if month:
+        return "month"
+    if quarter:
+        return "quarter"
+    return "year"
+
+
+def _resolve_period_label(
+    *,
+    label: Optional[str],
+    year: Optional[int],
+    quarter: Optional[str],
+    month: Optional[str],
+) -> str:
+    if label:
+        return label
+    if month:
+        return month
+    if quarter:
+        return quarter
+    if year:
+        return str(year)
+    return "all data"
+
+
+def _describe_subject(property_name: Optional[str], tenant_name: Optional[str]) -> str:
+    parts = []
+    if property_name:
+        parts.append(property_name)
+    if tenant_name:
+        parts.append(f"Tenant {tenant_name}")
+    if not parts:
+        return "portfolio"
+    return " / ".join(parts)
+
+
+def compute_portfolio_pnl(
+    *,
+    level: Optional[PeriodLevel] = None,
+    label: Optional[str] = None,
+    entity_name: Optional[str] = None,
+    property_name: Optional[str] = None,
+    tenant_name: Optional[str] = None,
+    year: Optional[int] = None,
+    quarter: Optional[str] = None,
+    month: Optional[str] = None,
+    include_breakdown: bool = True,
+) -> Dict[str, Any]:
+    """
+    Compute P&L totals for the requested filters.
+    """
+
+    filters = {
+        "entity_name": entity_name,
+        "property_name": property_name,
+        "tenant_name": tenant_name,
+        "year": year,
+        "quarter": quarter,
+        "month": month,
+    }
+    rows = filter_ledger(**filters)
+    if rows.empty:
+        period_label = _resolve_period_label(label=label, year=year, quarter=quarter, month=month)
+        subject = _describe_subject(property_name, tenant_name)
+        return {
+            "status": "no_data",
+            "label": f"Total P&L ({period_label})",
+            "value": 0.0,
+            "formatted": format_currency(0.0),
+            "breakdown": [],
+            "record_count": 0,
+            "message": f"No ledger data found for {subject} during {period_label}.",
+            "filters": {k: v for k, v in filters.items() if v is not None},
+        }
+
+    level = level or _infer_period_level(year, quarter, month)
+    agg = aggregate_pnl(rows, period_level=level, include_breakdown=include_breakdown)
+    totals_df: pd.DataFrame = agg["totals"]
+
+    totals_summary = {
+        "total_revenue": float(totals_df["total_revenue"].sum()),
+        "total_expenses": float(totals_df["total_expenses"].sum()),
+        "net_operating_income": float(totals_df["net_operating_income"].sum()),
+    }
+    net_value = totals_summary["net_operating_income"]
+
+    period_label = _resolve_period_label(label=label, year=year, quarter=quarter, month=month)
+    human_subject = _describe_subject(property_name, tenant_name)
+    message = (
+        f"P&L for {human_subject} ({period_label}): "
+        f"revenue {format_currency(totals_summary['total_revenue'])}, "
+        f"expenses {format_currency(totals_summary['total_expenses'])}, "
+        f"net {format_currency(net_value)}."
+    )
+
+    ledger_breakdown = None
+    if agg["breakdown"] is not None:
+        ledger_breakdown = agg["breakdown"].to_dict(orient="records")  # type: ignore[union-attr]
 
     result = {
-        "label": f"Total P&L ({period or 'all data'})",
-        "value": total,
-        "formatted": format_currency(total),
-        "breakdown": breakdown,
-        "categories": categories,
+        "status": "ok",
+        "label": f"Total P&L ({period_label})",
+        "value": net_value,
+        "formatted": format_currency(net_value),
+        "breakdown": pnl_by_property(rows),
         "record_count": len(rows),
+        "totals": totals_df.to_dict(orient="records"),
+        "totals_summary": totals_summary,
+        "ledger_breakdown": ledger_breakdown,
+        "filters": {k: v for k, v in filters.items() if v is not None},
+        "level": level,
+        "message": message,
     }
-    if period and rows.empty:
-        result["note"] = f"No rows matched period '{period}'. Showing overall totals."
     return result
 
 
@@ -373,9 +551,8 @@ __all__ = [
     "extract_tenant_names",
     "extract_period_hint",
     # pnl toolkit
-    "get_ledger_rows",
-    "aggregate_by_category",
-    "calculate_pnl",
+    "filter_ledger",
+    "aggregate_pnl",
     "pnl_by_property",
     "compute_portfolio_pnl",
     # price toolkit
