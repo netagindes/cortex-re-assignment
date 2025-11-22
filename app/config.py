@@ -1,9 +1,6 @@
-from __future__ import annotations
-
 import getpass
 import os
 from pathlib import Path
-from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -50,4 +47,3 @@ if __name__ == "__main__":
     _set_if_undefined("GEMINI_API_KEY")
     # _set_if_undefined("ANTHROPIC_API_KEY")
     # _set_if_undefined("TAVILY_API_KEY")
-
