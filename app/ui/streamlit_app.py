@@ -5,6 +5,8 @@ Streamlit chatbot interface that communicates with the FastAPI service.
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
+from typing import Any, Dict, List
 
 import httpx
 import streamlit as st
@@ -20,33 +22,30 @@ def main() -> None:
     st.caption("Chat with the FastAPI service powered by LangGraph agents.")
 
     if "messages" not in st.session_state:
-        st.session_state.messages = [
-            {
-                "role": "assistant",
-                "content": "Hi! Ask me to compare prices, summarize P&L, or describe any asset.",
-            }
-        ]
+        st.session_state.messages = []
+        _append_message(
+            role="assistant",
+            content="Hi! Ask me to compare prices, summarize P&L, or describe any asset.",
+        )
     if "pipeline_logs" not in st.session_state:
         st.session_state.pipeline_logs = []
 
     chat_col, log_col = st.columns([2, 1], gap="large")
 
     with chat_col:
-        for message in st.session_state.messages:
-            with st.chat_message(message["role"]):
-                st.write(message["content"])
+        st.subheader("Conversation (oldest → newest)")
+        history_container = st.container()
 
-        if prompt := st.chat_input("How can I help with your assets today?"):
-            st.session_state.messages.append({"role": "user", "content": prompt})
-            with st.chat_message("user"):
-                st.write(prompt)
-
-            with st.chat_message("assistant"):
-                with st.spinner("Contacting API..."):
-                    reply, logs = _call_api(prompt)
-                st.write(reply)
-            st.session_state.messages.append({"role": "assistant", "content": reply})
+        prompt = st.chat_input("How can I help with your assets today?")
+        if prompt:
+            _append_message("user", prompt)
+            with st.spinner("Contacting API..."):
+                reply, logs = _call_api(prompt)
+            _append_message("assistant", reply)
             st.session_state.pipeline_logs = logs
+
+        with history_container:
+            _render_chat_history()
 
     with log_col:
         _render_log_panel()
@@ -84,6 +83,46 @@ def _render_log_panel() -> None:
         st.info("No logs yet. Submit a prompt to view the pipeline trace.")
 
 
+def _render_chat_history() -> None:
+    ordered_messages = _ordered_messages()
+    for idx, message in enumerate(ordered_messages, start=1):
+        role = message.get("role", "assistant")
+        header = _format_message_header(idx, role, message.get("timestamp"))
+        with st.chat_message(role):
+            if header:
+                st.caption(header)
+            st.write(message.get("content", ""))
+
+
+def _append_message(role: str, content: str) -> None:
+    messages = st.session_state.setdefault("messages", [])
+    messages.append(
+        {
+            "role": role,
+            "content": content,
+            "timestamp": _current_timestamp(),
+        }
+    )
+
+
+def _ordered_messages() -> List[Dict[str, Any]]:
+    messages: List[Dict[str, Any]] = st.session_state.get("messages", [])
+    for message in messages:
+        message.setdefault("timestamp", _current_timestamp())
+    return sorted(messages, key=lambda msg: msg.get("timestamp", ""))
+
+
+def _format_message_header(index: int, role: str, timestamp: str | None) -> str:
+    parts = [f"{index}.", role.title()]
+    if timestamp:
+        human_time = timestamp.replace("T", " ").split("+")[0].split(".")[0]
+        parts.append(f"{human_time} UTC")
+    return " • ".join(parts)
+
+
+def _current_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 if __name__ == "__main__":
     main()
-
