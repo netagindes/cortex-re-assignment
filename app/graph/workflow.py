@@ -61,6 +61,9 @@ def _classify_node(state: GraphState) -> GraphState:
     state.context.entity_name = decision.entity_name
     state.context.property_name = decision.property_name
     state.context.tenant_name = decision.tenant_name
+    state.context.year = decision.year
+    state.context.quarter = decision.quarter
+    state.context.month = decision.month
     state.context.needs_clarification = decision.needs_clarification
     state.context.clarification_reasons = decision.missing_requirements
     state.log(

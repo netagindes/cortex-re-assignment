@@ -12,7 +12,6 @@ DATA_DIR = PROJECT_ROOT / "data"
 ASSETS_DATA_PATH = DATA_DIR / "assets.parquet"
 
 _COLUMN_RENAMES = {
-    "property_name": "address",
     "profit": "pnl",
     "entity_name": "entity",
     "ledger_type": "type",
@@ -27,6 +26,17 @@ def _normalize_dataset(df: pd.DataFrame) -> pd.DataFrame:
     rename_map = {src: dst for src, dst in _COLUMN_RENAMES.items() if src in df.columns}
     if rename_map:
         df = df.rename(columns=rename_map)
+
+    if "address" not in df.columns and "property_name" in df.columns:
+        df["address"] = df["property_name"]
+    if "property_name" not in df.columns and "address" in df.columns:
+        df["property_name"] = df["address"]
+
+    if "year" in df.columns:
+        df["year"] = pd.to_numeric(df["year"], errors="coerce").astype("Int64")
+    if "pnl" in df.columns:
+        df["pnl"] = pd.to_numeric(df["pnl"], errors="coerce").astype(float).fillna(0.0)
+
     if "year" in df.columns and "period" not in df.columns:
         df["period"] = df["year"].astype(str)
     return df

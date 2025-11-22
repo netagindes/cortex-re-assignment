@@ -6,11 +6,13 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from difflib import get_close_matches
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Sequence
 
 import pandas as pd
 
+from app.config import load_address_aliases
 from app.data_layer import load_assets
 
 
@@ -36,35 +38,170 @@ def build_response_payload(result: Any, metadata: Dict[str, Any] | None = None) 
 
 
 @lru_cache(maxsize=1)
-def _known_addresses() -> List[str]:
-    df = load_assets(columns=["address"])
-    if "address" not in df.columns:
+def _address_aliases() -> Dict[str, str]:
+    return load_address_aliases()
+
+
+@lru_cache(maxsize=1)
+def _known_properties() -> List[str]:
+    df = load_assets(columns=["address", "property_name"])
+    names: List[str] = []
+    for column in ("address", "property_name"):
+        if column in df.columns:
+            names.extend(df[column].dropna().astype(str).tolist())
+    seen = set()
+    unique_names: List[str] = []
+    for name in names:
+        normalized = name.strip()
+        if normalized and normalized not in seen:
+            unique_names.append(normalized)
+            seen.add(normalized)
+    return unique_names
+
+
+@lru_cache(maxsize=1)
+def _known_tenants() -> List[str]:
+    df = load_assets(columns=["tenant_name"])
+    if "tenant_name" not in df.columns:
         return []
-    return [addr for addr in df["address"].dropna().unique().tolist()]
+    tenants = df["tenant_name"].dropna().astype(str).unique().tolist()
+    return [tenant for tenant in tenants if tenant.strip()]
+
+
+def _building_pattern_matches(text: str) -> List[str]:
+    pattern = re.findall(r"(building\s+\d+)", text, flags=re.IGNORECASE)
+    return [match.title() for match in pattern]
+
+
+def _fuzzy_property_match(text: str) -> Optional[str]:
+    candidates = _known_properties()
+    if not candidates:
+        return None
+    matches = get_close_matches(text, candidates, n=1, cutoff=0.75)
+    return matches[0] if matches else None
 
 
 def extract_addresses(text: str, max_matches: int = 2) -> List[str]:
     lowered = text.lower()
     matches: List[str] = []
-    for address in _known_addresses():
-        if address.lower() in lowered:
+    alias_map = _address_aliases()
+
+    def _record(address: str) -> bool:
+        if address and address not in matches:
             matches.append(address)
+        return len(matches) >= max_matches
+
+    for alias, canonical in alias_map.items():
+        if alias in lowered and _record(canonical):
+            return matches
+
+    for address in _known_properties():
+        if address.lower() in lowered and _record(address):
+            return matches
+
+    for pattern_match in _building_pattern_matches(text):
+        if _record(pattern_match):
+            return matches
+
+    if len(matches) < max_matches:
+        candidate = _fuzzy_property_match(text)
+        if candidate:
+            _record(candidate)
+    return matches
+
+
+def extract_tenant_names(text: str, max_matches: int = 2) -> List[str]:
+    lowered = text.lower()
+    matches: List[str] = []
+    for tenant in _known_tenants():
+        if tenant.lower() in lowered and tenant not in matches:
+            matches.append(tenant)
             if len(matches) >= max_matches:
                 break
     return matches
 
 
-def extract_period_hint(text: str) -> Optional[str]:
+_MONTH_MAP = {
+    "january": "M01",
+    "february": "M02",
+    "march": "M03",
+    "april": "M04",
+    "may": "M05",
+    "june": "M06",
+    "july": "M07",
+    "august": "M08",
+    "september": "M09",
+    "october": "M10",
+    "november": "M11",
+    "december": "M12",
+}
+
+
+def extract_period_hint(text: str) -> Dict[str, Optional[str] | Optional[int]]:
+    """
+    Parse a natural-language period hint into dataset-ready filters.
+
+    Returns a dict with keys: label, level, year, quarter, month.
+    """
+
     lowered = text.lower()
-    current_year = datetime.utcnow().year
+    now = datetime.utcnow()
+
+    def build_response(
+        *,
+        label: Optional[str] = None,
+        level: Optional[str] = None,
+        year: Optional[int] = None,
+        quarter: Optional[str] = None,
+        month: Optional[str] = None,
+    ) -> Dict[str, Optional[str] | Optional[int]]:
+        return {
+            "label": label,
+            "level": level,
+            "year": year,
+            "quarter": quarter,
+            "month": month,
+        }
+
     if "this year" in lowered or "ytd" in lowered:
-        return str(current_year)
+        year = now.year
+        return build_response(label=str(year), level="year", year=year)
     if "last year" in lowered:
-        return str(current_year - 1)
-    match = re.search(r"\b(20\d{2})\b", text)
-    if match:
-        return match.group(1)
-    return None
+        year = now.year - 1
+        return build_response(label=str(year), level="year", year=year)
+    if "this quarter" in lowered:
+        quarter = f"{now.year}-Q{((now.month - 1) // 3) + 1}"
+        return build_response(label=quarter, level="quarter", year=now.year, quarter=quarter)
+    if "last quarter" in lowered:
+        q = ((now.month - 1) // 3) + 1
+        year = now.year
+        q -= 1
+        if q == 0:
+            q = 4
+            year -= 1
+        quarter = f"{year}-Q{q}"
+        return build_response(label=quarter, level="quarter", year=year, quarter=quarter)
+
+    quarter_match = re.search(r"(20\d{2})[-\s]?(q[1-4])", lowered)
+    if quarter_match:
+        year = int(quarter_match.group(1))
+        quarter_suffix = quarter_match.group(2).upper()
+        quarter = f"{year}-{quarter_suffix}"
+        return build_response(label=quarter, level="quarter", year=year, quarter=quarter)
+
+    for name, code in _MONTH_MAP.items():
+        if name in lowered:
+            year_match = re.search(r"(20\d{2})", lowered)
+            year = int(year_match.group(1)) if year_match else now.year
+            month_label = f"{year}-{code}"
+            return build_response(label=month_label, level="month", year=year, month=month_label)
+
+    year_match = re.search(r"\b(20\d{2})\b", lowered)
+    if year_match:
+        year = int(year_match.group(1))
+        return build_response(label=str(year), level="year", year=year)
+
+    return build_response()
 
 
 # --------------------------------------------------------------------------------------
@@ -233,6 +370,7 @@ __all__ = [
     "format_currency",
     "build_response_payload",
     "extract_addresses",
+    "extract_tenant_names",
     "extract_period_hint",
     # pnl toolkit
     "get_ledger_rows",

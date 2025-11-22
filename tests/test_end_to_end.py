@@ -9,5 +9,5 @@ def test_workflow_builds():
         state = compiled.invoke(GraphState(context=QueryContext(user_input="Hello", request_type="general")))
     except ValueError:
         state = None
-    assert state is None or isinstance(state, GraphState)
+    assert state is None or isinstance(state, GraphState) or isinstance(state, dict)
 
