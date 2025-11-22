@@ -57,6 +57,12 @@ def _classify_node(state: GraphState) -> GraphState:
     state.context.request_type = decision.request_type
     state.context.addresses = decision.addresses
     state.context.period = decision.period
+    state.context.period_level = decision.period_level
+    state.context.entity_name = decision.entity_name
+    state.context.property_name = decision.property_name
+    state.context.tenant_name = decision.tenant_name
+    state.context.needs_clarification = decision.needs_clarification
+    state.context.clarification_reasons = decision.missing_requirements
     state.log(
         "Supervisor classification complete",
         request_type=decision.request_type,
@@ -77,7 +83,10 @@ def _price_node(state: GraphState) -> GraphState:
     state.log("Price comparison node entered", addresses=addresses)
     if len(addresses) < 2:
         state.result = {
-            "message": "Please mention two property addresses so I can compare their prices."
+            "message": (
+                "Please mention two properties (e.g., Building 120 and Building 160) "
+                "so I can compare their values."
+            )
         }
         state.log("Price comparison skipped due to insufficient addresses")
         return state
@@ -98,6 +107,15 @@ def _price_node(state: GraphState) -> GraphState:
 
 def _pnl_node(state: GraphState) -> GraphState:
     state.log("PnL node entered", period=state.context.period)
+    if state.context.request_type == "pnl" and state.context.needs_clarification:
+        state.result = {
+            "message": (
+                "I need the time period (year, quarter, or month) to calculate P&L. "
+                "For example: 'What is the total P&L for 2025?'"
+            )
+        }
+        state.log("PnL aggregation skipped - clarification required")
+        return state
     try:
         state.result = pnl_agent.run(state.context.period)
     except ValueError as exc:
@@ -126,7 +144,11 @@ def _asset_node(state: GraphState) -> GraphState:
 
 def _clarification_node(state: GraphState) -> GraphState:
     state.log("Clarification node entered")
-    state.result = clarify_agent.run(state.context.user_input)
+    state.result = clarify_agent.run(
+        state.context.user_input,
+        request_type=state.context.request_type,
+        reasons=state.context.clarification_reasons,
+    )
     state.log("Clarification prompt generated")
     return state
 

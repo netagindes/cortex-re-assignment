@@ -17,6 +17,15 @@ class QueryContext:
     request_type: str
     addresses: List[str] = field(default_factory=list)
     period: Optional[str] = None
+    period_level: Optional[str] = None
+    entity_name: Optional[str] = None
+    property_name: Optional[str] = None
+    tenant_name: Optional[str] = None
+    year: Optional[int] = None
+    quarter: Optional[str] = None
+    month: Optional[str] = None
+    needs_clarification: bool = False
+    clarification_reasons: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -25,6 +34,7 @@ class GraphState:
     result: Optional[Dict[str, Any]] = None
     diagnostics: List[PipelineLogEntry] = field(default_factory=list)
     logger: PipelineLogger | None = field(default=None, repr=False)
+    pnl_result: Optional[Dict[str, Any]] = None
 
     def log(self, message: str, *, level: str = "info", **metadata: Any) -> None:
         entry = PipelineLogEntry(

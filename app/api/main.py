@@ -96,6 +96,15 @@ def _ensure_graph_state(
             request_type=request_type,
             addresses=list(context.get("addresses") or []),
             period=context.get("period"),
+             period_level=context.get("period_level"),
+             entity_name=context.get("entity_name"),
+             property_name=context.get("property_name"),
+             tenant_name=context.get("tenant_name"),
+             year=context.get("year"),
+             quarter=context.get("quarter"),
+             month=context.get("month"),
+             needs_clarification=bool(context.get("needs_clarification")),
+             clarification_reasons=list(context.get("clarification_reasons") or []),
         )
     if not isinstance(context, QueryContext):
         raise TypeError("Workflow returned state without a valid context.")
@@ -107,6 +116,7 @@ def _ensure_graph_state(
         result=state_like.get("result"),
         diagnostics=diagnostics,
         logger=logger,
+        pnl_result=state_like.get("pnl_result"),
     )
 
 
