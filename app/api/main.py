@@ -41,6 +41,7 @@ class ChatResponse(BaseModel):
     response: str
     note: str | None = None
     logs: list[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] | None = None
 
 
 @app.get("/health", response_model=dict)
@@ -63,12 +64,14 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
     raw_state = compiled_workflow.invoke(state)
     result_state = _ensure_graph_state(raw_state, pipeline_logger)
     response_text, note = _format_response(result_state)
+    metadata = _build_metadata(result_state)
 
     pipeline_logger.info("Responding to client", note=note)
     return ChatResponse(
         response=response_text,
         note=note,
         logs=pipeline_logger.as_text_lines(),
+        metadata=metadata,
     )
 
 
@@ -96,15 +99,15 @@ def _ensure_graph_state(
             request_type=request_type,
             addresses=list(context.get("addresses") or []),
             period=context.get("period"),
-             period_level=context.get("period_level"),
-             entity_name=context.get("entity_name"),
-             property_name=context.get("property_name"),
-             tenant_name=context.get("tenant_name"),
-             year=context.get("year"),
-             quarter=context.get("quarter"),
-             month=context.get("month"),
-             needs_clarification=bool(context.get("needs_clarification")),
-             clarification_reasons=list(context.get("clarification_reasons") or []),
+            period_level=context.get("period_level"),
+            entity_name=context.get("entity_name"),
+            property_name=context.get("property_name"),
+            tenant_name=context.get("tenant_name"),
+            year=context.get("year"),
+            quarter=context.get("quarter"),
+            month=context.get("month"),
+            needs_clarification=bool(context.get("needs_clarification")),
+            clarification_reasons=list(context.get("clarification_reasons") or []),
         )
     if not isinstance(context, QueryContext):
         raise TypeError("Workflow returned state without a valid context.")
@@ -157,6 +160,13 @@ def _format_response(state: GraphState) -> Tuple[str, str | None]:
 
     if request_type == "pnl" and {"label", "formatted"} <= result.keys():
         lines = [f"{result['label']}: {result['formatted']}"]
+        summary = result.get("totals_summary") or {}
+        if summary:
+            lines.append(
+                "Summary: "
+                f"Revenue {format_currency(summary.get('total_revenue', 0.0))}, "
+                f"Expenses {format_currency(summary.get('total_expenses', 0.0))}"
+            )
         breakdown = result.get("breakdown") or []
         if breakdown:
             lines.append("Top contributors:")
@@ -180,3 +190,32 @@ def _format_response(state: GraphState) -> Tuple[str, str | None]:
         "I wasn't able to match your request to a known operation. Please provide more details.",
         None,
     )
+
+
+def _build_metadata(state: GraphState) -> Dict[str, Any] | None:
+    """
+    Provide a structured payload for UI/clients that want more than plain text.
+    """
+
+    base: Dict[str, Any] = {
+        "request_type": state.context.request_type,
+        "addresses": state.context.addresses,
+        "period": state.context.period,
+        "period_level": state.context.period_level,
+        "entity_name": state.context.entity_name,
+        "property_name": state.context.property_name,
+        "tenant_name": state.context.tenant_name,
+        "year": state.context.year,
+        "quarter": state.context.quarter,
+        "month": state.context.month,
+    }
+
+    result = state.result
+    if isinstance(result, dict):
+        base["result"] = result
+    elif isinstance(result, str):
+        base["result"] = {"message": result}
+    else:
+        base["result"] = None
+
+    return base

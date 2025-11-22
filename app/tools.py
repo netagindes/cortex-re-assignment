@@ -283,6 +283,10 @@ def aggregate_pnl(
     if df.empty:
         return {"totals": pd.DataFrame(), "breakdown": None}
 
+    working = df.copy()
+    if "type" not in working.columns:
+        working["type"] = working["pnl"].apply(lambda value: "revenue" if float(value) >= 0 else "expenses")
+
     period_column_map = {
         "month": "month",
         "quarter": "quarter",
@@ -291,25 +295,29 @@ def aggregate_pnl(
     period_col = period_column_map[period_level]
     base_group = []
     for column in ("entity", "property_name", period_col):
-        if column in df.columns:
+        if column in working.columns:
             base_group.append(column)
 
     breakdown_group = list(base_group)
     for column in ("type", "group", "category"):
-        if column in df.columns:
+        if column in working.columns:
             breakdown_group.append(column)
 
     breakdown_df = None
     if include_breakdown and breakdown_group:
         breakdown_df = (
-            df.groupby(breakdown_group, dropna=False)["pnl"]
+            working.groupby(breakdown_group, dropna=False)["pnl"]
             .sum()
             .reset_index()
             .rename(columns={"pnl": "amount"})
         )
 
+    group_keys = list(base_group)
+    if "type" in working.columns:
+        group_keys.append("type")
+
     ledger_totals = (
-        df.groupby(base_group + ["type"], dropna=False)["pnl"]
+        working.groupby(group_keys, dropna=False)["pnl"]
         .sum()
         .reset_index()
         .rename(columns={"pnl": "amount"})
@@ -325,8 +333,13 @@ def aggregate_pnl(
         .reset_index()
     )
     pivot["total_revenue"] = pivot.get("revenue", 0.0)
-    pivot["total_expenses"] = pivot.get("expenses", 0.0)
-    pivot["net_operating_income"] = pivot["total_revenue"] + pivot["total_expenses"]
+    expenses = pivot.get("expenses", 0.0)
+    if hasattr(expenses, "abs"):
+        expenses = expenses.abs()
+    else:
+        expenses = abs(expenses)
+    pivot["total_expenses"] = expenses
+    pivot["net_operating_income"] = pivot["total_revenue"] - pivot["total_expenses"]
 
     return {
         "totals": pivot,
