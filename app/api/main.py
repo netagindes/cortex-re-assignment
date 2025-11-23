@@ -5,14 +5,16 @@ Basic FastAPI service acting as the entrypoint for the multi-agent system.
 from __future__ import annotations
 
 import uuid
+import copy
 from contextlib import asynccontextmanager
+from threading import Lock
 from typing import Any, Dict, List, Mapping, Tuple
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from app.agents.request_types import RequestType, normalize_request_type
-from app.graph.state import GraphState, QueryContext
+from app.graph.state import ClarificationItem, GraphState, QueryContext
 from app.graph.workflow import build_workflow
 from app.logging_utils import PipelineLogEntry, PipelineLogger, setup_logging
 from app.tools import format_currency
@@ -36,6 +38,10 @@ app = FastAPI(title="Cortex Asset Agent API", version="0.1.0", lifespan=lifespan
 
 class ChatRequest(BaseModel):
     message: str
+    conversation_id: str | None = Field(
+        default=None,
+        description="Existing conversation identifier. Omit to start a new conversation.",
+    )
 
 
 class ChatResponse(BaseModel):
@@ -44,6 +50,31 @@ class ChatResponse(BaseModel):
     logs: list[str] = Field(default_factory=list)
     metadata: Dict[str, Any] | None = None
     log_markdown: str | None = None
+    conversation_id: str
+
+
+class ConversationStore:
+    """
+    Very small in-memory cache that keeps track of the latest QueryContext per conversation.
+    """
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._store: Dict[str, QueryContext] = {}
+
+    def load(self, conversation_id: str) -> QueryContext | None:
+        with self._lock:
+            context = self._store.get(conversation_id)
+        if context is None:
+            return None
+        return copy.deepcopy(context)
+
+    def save(self, conversation_id: str, context: QueryContext) -> None:
+        with self._lock:
+            self._store[conversation_id] = copy.deepcopy(context)
+
+
+conversation_store = ConversationStore()
 
 
 @app.get("/health", response_model=dict)
@@ -60,11 +91,19 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
     pipeline_logger = PipelineLogger("api.chat", context={"request_id": request_id})
     pipeline_logger.info("Received chat request", user_message=payload.message)
 
-    context = QueryContext(user_input=payload.message, request_type=RequestType.GENERAL)
+    conversation_id = payload.conversation_id or str(uuid.uuid4())
+    existing_context = conversation_store.load(conversation_id)
+    if existing_context:
+        context = existing_context
+        context.user_input = payload.message
+        context.request_type = RequestType.GENERAL
+    else:
+        context = QueryContext(user_input=payload.message, request_type=RequestType.GENERAL)
     state = GraphState(context=context, logger=pipeline_logger)
 
     raw_state = compiled_workflow.invoke(state)
     result_state = _ensure_graph_state(raw_state, pipeline_logger)
+    conversation_store.save(conversation_id, result_state.context)
     response_text, note = _format_response(result_state)
     metadata = _build_metadata(result_state)
 
@@ -75,6 +114,7 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
         logs=pipeline_logger.as_text_lines(),
         metadata=metadata,
         log_markdown=pipeline_logger.as_markdown(),
+        conversation_id=conversation_id,
     )
 
 
@@ -118,6 +158,11 @@ def _ensure_graph_state(
             needs_clarification=bool(context.get("needs_clarification")),
             clarification_reasons=list(context.get("clarification_reasons") or []),
             request_measurement=context.get("request_measurement"),
+            comparison_periods=list(context.get("comparison_periods") or []),
+            aggregation_level=context.get("aggregation_level"),
+            clarifications=_deserialize_clarifications(context.get("clarifications")),
+            awaiting_user_reply=bool(context.get("awaiting_user_reply")),
+            clarification_needed=bool(context.get("clarification_needed")),
         )
     if not isinstance(context, QueryContext):
         raise TypeError("Workflow returned state without a valid context.")
@@ -261,6 +306,10 @@ def _build_metadata(state: GraphState) -> Dict[str, Any] | None:
         "quarter": state.context.quarter,
         "month": state.context.month,
         "request_measurement": state.context.request_measurement,
+        "aggregation_level": state.context.aggregation_level,
+        "awaiting_user_reply": state.context.awaiting_user_reply,
+        "clarification_needed": state.context.clarification_needed,
+        "clarifications": _serialize_clarifications(state.context.clarifications),
         "comparison_periods": state.context.comparison_periods,
     }
 
@@ -273,3 +322,40 @@ def _build_metadata(state: GraphState) -> Dict[str, Any] | None:
         base["result"] = None
 
     return base
+
+
+def _deserialize_clarifications(raw: Any) -> List[ClarificationItem]:
+    if not raw:
+        return []
+    normalized: List[ClarificationItem] = []
+    for entry in raw:
+        if isinstance(entry, ClarificationItem):
+            normalized.append(entry)
+            continue
+        if not isinstance(entry, Mapping):
+            continue
+        normalized.append(
+            ClarificationItem(
+                field=entry.get("field", "property_name"),  # type: ignore[arg-type]
+                question=entry.get("question", ""),
+                kind=entry.get("kind"),
+                options=list(entry.get("options") or []),
+                value=entry.get("value"),
+            )
+        )
+    return normalized
+
+
+def _serialize_clarifications(items: List[ClarificationItem]) -> List[Dict[str, Any]]:
+    serialized: List[Dict[str, Any]] = []
+    for item in items:
+        serialized.append(
+            {
+                "field": item.field,
+                "question": item.question,
+                "kind": item.kind,
+                "options": list(item.options),
+                "value": item.value,
+            }
+        )
+    return serialized

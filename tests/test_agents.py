@@ -1,13 +1,8 @@
 import pytest
 
-from app.agents import (
-    ClarificationAgent,
-    GeneralKnowledgeAgent,
-    PnLAgent,
-    RequestType,
-    SupervisorAgent,
-)
+from app.agents import ClarificationAgent, GeneralKnowledgeAgent, PnLAgent, RequestType, SupervisorAgent
 from app.data_layer import load_assets
+from app.graph.state import ClarificationItem, QueryContext
 
 
 def test_supervisor_classification():
@@ -44,11 +39,11 @@ def test_supervisor_pnl_leaves_property_blank():
     assert decision.property_name is None
 
 
-def test_supervisor_requires_granularity_for_yearly_property():
+def test_supervisor_requires_aggregation_level_for_yearly_property():
     agent = SupervisorAgent()
     decision = agent.analyze("Show me the yearly P&L for Building 180 for 2025.")
     assert decision.request_type == RequestType.PNL
-    assert "granularity" in decision.missing_requirements
+    assert "aggregation_level" in decision.missing_requirements
     assert decision.needs_clarification
 
 
@@ -90,24 +85,77 @@ def test_supervisor_requires_single_property_for_pnl_comparison():
 
 def test_clarification_message_includes_suggestions():
     agent = ClarificationAgent()
-    response = agent.run(
-        "Need comparison help",
+    context = QueryContext(user_input="Need comparison help")
+    item = agent.run(
+        context,
         request_type=RequestType.PRICE_COMPARISON,
         reasons=["second_property"],
         suggestions=["Building 120", "Building 160"],
     )
-    assert "Building 120" in response["message"]
-    assert "Building 160" in response["message"]
+    assert "Building 120" in item.question
+    assert "Building 160" in item.question
 
 
-def test_clarification_pnl_granularity_prompt():
+def test_clarification_pnl_aggregation_prompt():
     agent = ClarificationAgent()
-    response = agent.run(
-        "Need more info",
+    context = QueryContext(user_input="Need more info")
+    item = agent.run(
+        context,
         request_type=RequestType.PNL,
-        reasons=["granularity"],
+        reasons=["aggregation_level"],
     )
-    assert "tenant-level, property-level, or combined totals" in response["message"]
+    assert "tenant-level, property-level, or combined totals" in item.question
+
+
+def test_supervisor_follow_up_sets_aggregation_level():
+    agent = SupervisorAgent()
+    context = QueryContext(
+        user_input="property",
+        request_type=RequestType.PNL,
+        property_name="Building 180",
+        period="2025",
+        period_level="year",
+        clarifications=[
+            ClarificationItem(
+                field="aggregation_level",
+                question="Do you want tenant-level, property-level, or combined totals?",
+                kind="choice",
+                options=["tenant", "property", "combined"],
+            )
+        ],
+        awaiting_user_reply=True,
+        needs_clarification=True,
+        clarification_reasons=["aggregation_level"],
+    )
+    decision = agent.analyze(context)
+    assert decision.aggregation_level == "property"
+    assert not decision.needs_clarification
+    assert context.aggregation_level == "property"
+    assert not context.awaiting_user_reply
+
+
+def test_supervisor_follow_up_period_granularity_requests_specific_value():
+    agent = SupervisorAgent()
+    context = QueryContext(
+        user_input="year",
+        request_type=RequestType.PNL,
+        property_name="Building 180",
+        clarifications=[
+            ClarificationItem(
+                field="period",
+                question="Which period should I use? Month, quarter, or year?",
+                kind="granularity",
+                options=["month", "quarter", "year"],
+            )
+        ],
+        awaiting_user_reply=True,
+        needs_clarification=True,
+        clarification_reasons=["period"],
+    )
+    decision = agent.analyze(context)
+    assert context.period_level == "year"
+    assert decision.needs_clarification
+    assert "period" in decision.missing_requirements
 
 
 def test_pnl_agent_year_totals():

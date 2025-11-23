@@ -6,10 +6,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from app.agents.request_types import RequestType
 from app.logging_utils import PipelineLogEntry, PipelineLogger
+
+
+@dataclass
+class ClarificationItem:
+    """
+    Structured clarification metadata shared between Supervisor and Clarification agents.
+    """
+
+    field: Literal["property_name", "entity_name", "tenant_name", "period", "aggregation_level", "comparison_periods"]
+    question: str
+    kind: Optional[Literal["value", "granularity", "choice"]] = None
+    options: List[str] = field(default_factory=list)
+    value: Optional[str] = None
 
 
 @dataclass
@@ -35,6 +48,10 @@ class QueryContext:
     clarification_reasons: List[str] = field(default_factory=list)
     request_measurement: Optional[str] = None
     comparison_periods: List[Dict[str, Any]] = field(default_factory=list)
+    aggregation_level: Optional[Literal["tenant", "property", "combined"]] = None
+    clarifications: List[ClarificationItem] = field(default_factory=list)
+    awaiting_user_reply: bool = False
+    clarification_needed: bool = False
 
 
 @dataclass
@@ -80,5 +97,5 @@ class GraphState:
         return [entry.as_text() for entry in self.diagnostics]
 
 
-__all__ = ["QueryContext", "GraphState"]
+__all__ = ["ClarificationItem", "QueryContext", "GraphState"]
 

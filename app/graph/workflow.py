@@ -21,7 +21,7 @@ from app.agents import (
 )
 from app.agents.errors import AgentError, ErrorType
 from app.agents.request_types import RequestType
-from app.graph.state import GraphState, QueryContext
+from app.graph.state import ClarificationItem, GraphState, QueryContext
 
 supervisor = SupervisorAgent()
 pnl_agent = PnLAgent()
@@ -68,7 +68,7 @@ def build_workflow() -> StateGraph:
 
 def _classify_node(state: GraphState) -> GraphState:
     state.log("Supervisor classification started", agent="supervisor", requirement_section="req1-routing")
-    decision = supervisor.analyze(state.context.user_input)
+    decision = supervisor.analyze(state.context)
     state.context.request_type = decision.request_type
     state.context.request_measurement = decision.measurement_id
     state.context.addresses = decision.addresses
@@ -88,6 +88,10 @@ def _classify_node(state: GraphState) -> GraphState:
     state.context.month = decision.month
     state.context.comparison_periods = decision.comparison_periods
     state.context.needs_clarification = decision.needs_clarification
+    state.context.clarification_needed = decision.needs_clarification
+    state.context.aggregation_level = decision.aggregation_level
+    state.context.clarifications = decision.clarifications
+    state.context.awaiting_user_reply = decision.awaiting_user_reply
     state.context.clarification_reasons = decision.missing_requirements
     state.log(
         "Supervisor classification complete",
@@ -101,11 +105,14 @@ def _classify_node(state: GraphState) -> GraphState:
 
 
 def _route_from_supervisor(state: GraphState) -> str:
-    request_type = state.context.request_type or RequestType.CLARIFICATION
-    if isinstance(request_type, RequestType):
-        destination = request_type.value
+    if state.context.awaiting_user_reply or state.context.needs_clarification:
+        destination = RequestType.CLARIFICATION.value
     else:
-        destination = str(request_type)
+        request_type = state.context.request_type or RequestType.CLARIFICATION
+        if isinstance(request_type, RequestType):
+            destination = request_type.value
+        else:
+            destination = str(request_type)
     state.log(
         "Routing to specialist",
         agent="supervisor",
@@ -174,7 +181,7 @@ def _pnl_node(state: GraphState) -> GraphState:
             prompts.append(
                 "Which period would you like (month, quarter, or year)? For example: 'What is the total P&L for 2025?'"
             )
-        if "granularity" in reasons:
+        if "aggregation_level" in reasons:
             prompts.append("Do you want tenant-level, property-level, or combined totals?")
         if not prompts:
             prompts.append("Please share the missing details so I can calculate the P&L.")
@@ -292,17 +299,35 @@ def _asset_node(state: GraphState) -> GraphState:
 
 def _clarification_node(state: GraphState) -> GraphState:
     state.log("Clarification node entered", agent="clarification_agent", requirement_section="req5-error")
-    state.result = clarify_agent.run(
-        state.context.user_input,
+    item = clarify_agent.run(
+        state.context,
         request_type=state.context.request_type,
         reasons=state.context.clarification_reasons,
         suggestions=state.context.suggested_addresses,
     )
-    state.log("Clarification prompt generated", agent="clarification_agent", requirement_section="req5-error")
+    _apply_clarification_item(state, item)
+    state.log(
+        "Clarification prompt generated",
+        agent="clarification_agent",
+        requirement_section="req5-error",
+        field=item.field,
+    )
     return state
 
 
 def _general_node(state: GraphState) -> GraphState:
+    if state.context.awaiting_user_reply and state.context.clarifications:
+        pending = state.context.clarifications[-1].question
+        state.result = {
+            "message": f"I'm still waiting for your answer to: {pending}",
+            "note": "A clarification is pending; please answer the question above.",
+        }
+        state.log(
+            "General knowledge blocked due to pending clarification",
+            agent="general_agent",
+            requirement_section="req5-error",
+        )
+        return state
     state.log("General knowledge node entered", agent="general_agent", requirement_section="req3-processing")
     state.result = general_agent.run(state.context.user_input)
     if state.result:
@@ -440,18 +465,19 @@ def _handle_agent_error(state: GraphState, error: AgentError, *, agent_name: str
         if reason and reason not in reasons:
             reasons.append(reason)
         state.context.clarification_reasons = reasons
-        state.context.needs_clarification = True
-        state.result = clarify_agent.run(
-            state.context.user_input,
+        item = clarify_agent.run(
+            state.context,
             request_type=state.context.request_type,
             reasons=reasons,
             suggestions=state.context.suggested_addresses,
         )
+        _apply_clarification_item(state, item)
         state.log(
             "Clarification prompt issued after agent error",
             agent="clarification_agent",
             requirement_section="req5-error",
             reasons=reasons,
+            field=item.field,
         )
         return state
     payload = error.to_payload()
@@ -469,4 +495,29 @@ def _clarification_reason_for_error(request_type: RequestType | None, error_type
     if request_type == RequestType.PNL:
         return "property"
     return "details"
+
+
+def _apply_clarification_item(state: GraphState, item: ClarificationItem) -> None:
+    state.context.clarifications = [item]
+    state.context.awaiting_user_reply = True
+    state.context.needs_clarification = True
+    state.context.clarification_needed = True
+    reasons = list(state.context.clarification_reasons or [])
+    if item.field not in reasons:
+        reasons.append(item.field)
+    state.context.clarification_reasons = reasons
+    state.result = {
+        "message": item.question,
+        "clarification": _serialize_clarification_item(item),
+    }
+
+
+def _serialize_clarification_item(item: ClarificationItem) -> Dict[str, Any]:
+    return {
+        "field": item.field,
+        "question": item.question,
+        "kind": item.kind,
+        "options": list(item.options),
+        "value": item.value,
+    }
 

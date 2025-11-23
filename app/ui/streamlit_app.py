@@ -29,6 +29,8 @@ def main() -> None:
         )
     if "pipeline_logs" not in st.session_state:
         st.session_state.pipeline_logs = []
+    if "conversation_id" not in st.session_state:
+        st.session_state.conversation_id = None
 
     chat_col, log_col = st.columns([2, 1], gap="large")
 
@@ -40,10 +42,12 @@ def main() -> None:
         if prompt:
             _append_message("user", prompt)
             with st.spinner("Contacting API..."):
-                reply, logs, markdown = _call_api(prompt)
+                reply, logs, markdown, conv_id = _call_api(prompt, st.session_state.conversation_id)
             _append_message("assistant", reply)
             st.session_state.pipeline_logs = logs
             st.session_state.pipeline_markdown = markdown
+            if conv_id:
+                st.session_state.conversation_id = conv_id
 
         with history_container:
             _render_chat_history()
@@ -52,10 +56,13 @@ def main() -> None:
         _render_log_panel()
 
 
-def _call_api(message: str) -> tuple[str, list[str], str | None]:
+def _call_api(message: str, conversation_id: str | None) -> tuple[str, list[str], str | None, str | None]:
     try:
         with httpx.Client(timeout=30.0) as client:
-            response = client.post(f"{API_URL}/chat", json={"message": message})
+            payload: Dict[str, Any] = {"message": message}
+            if conversation_id:
+                payload["conversation_id"] = conversation_id
+            response = client.post(f"{API_URL}/chat", json=payload)
             response.raise_for_status()
             data = response.json()
             base = data.get("response", "No response received.")
@@ -67,12 +74,13 @@ def _call_api(message: str) -> tuple[str, list[str], str | None]:
                 logs = ["Processing steps are not available for this request."]
             if note:
                 logs.append(f"Note: {note}")
-            return base, logs, data.get("log_markdown")
+            conv_id = data.get("conversation_id") or conversation_id
+            return base, logs, data.get("log_markdown"), conv_id
     except httpx.RequestError as exc:
-        return (f"Failed to reach API: {exc}", [f"RequestError: {exc}"], None)
+        return (f"Failed to reach API: {exc}", [f"RequestError: {exc}"], None, conversation_id)
     except httpx.HTTPStatusError as exc:
         detail = f"API error {exc.response.status_code}: {exc.response.text}"
-        return (detail, [detail], None)
+        return (detail, [detail], None, conversation_id)
 
 
 def _render_log_panel() -> None:

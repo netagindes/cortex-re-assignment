@@ -2,7 +2,7 @@ import pytest
 
 from app.agents import RequestType
 from app.agents.request_types import normalize_request_type
-from app.graph.state import GraphState, QueryContext
+from app.graph.state import ClarificationItem, GraphState, QueryContext
 from app.graph.workflow import build_workflow
 
 
@@ -25,11 +25,11 @@ def test_pnl_query_handles_year():
 
 def test_pnl_query_missing_period_prompts_for_period():
     state = _invoke("Give me the P&L for Building 180.")
-    assert "Which period would you like" in state.result["message"]
-    assert "month, quarter, or year" in state.result["message"]
+    assert "Which period should I use" in state.result["message"]
+    assert "Month, quarter, or year" in state.result["message"]
 
 
-def test_pnl_query_yearly_property_prompts_for_granularity():
+def test_pnl_query_yearly_property_prompts_for_aggregation_level():
     state = _invoke("Show me the yearly P&L for Building 180 for 2025.")
     assert "tenant-level, property-level, or combined totals" in state.result["message"]
 
@@ -40,10 +40,10 @@ def test_price_query_without_prices_returns_message():
     assert "price" in state.result["message"].lower()
 
 
-def test_price_query_reports_capability_gap():
+def test_price_query_requests_known_properties():
     state = _invoke("What is the price of my asset at 123 Main St compared to the one at 456 Oak Ave?")
     assert state.context.request_type == RequestType.PRICE_COMPARISON
-    assert "valuation data" in state.result["message"].lower()
+    assert "Which property are you referring to" in state.result["message"]
 
 
 def test_general_query_routes_to_general_agent():
@@ -84,6 +84,21 @@ def _invoke(message: str) -> GraphState:
             needs_clarification=bool(context.get("needs_clarification")),
             clarification_reasons=list(context.get("clarification_reasons") or []),
             request_measurement=context.get("request_measurement"),
+            comparison_periods=list(context.get("comparison_periods") or []),
+            aggregation_level=context.get("aggregation_level"),
+            clarifications=[
+                ClarificationItem(
+                    field=item.get("field", "property_name"),
+                    question=item.get("question", ""),
+                    kind=item.get("kind"),
+                    options=list(item.get("options") or []),
+                    value=item.get("value"),
+                )
+                for item in (context.get("clarifications") or [])
+                if isinstance(item, dict)
+            ],
+            awaiting_user_reply=bool(context.get("awaiting_user_reply")),
+            clarification_needed=bool(context.get("clarification_needed")),
         )
     diagnostics = raw_state.get("diagnostics") or []
     return GraphState(

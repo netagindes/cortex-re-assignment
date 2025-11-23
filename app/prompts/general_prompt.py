@@ -32,6 +32,11 @@ Rules:
 3. Do not provide numeric values.
 4. Do not mention internal agent structure unless asked directly.
 
+SAFETY RULE:
+If AssetQueryState.awaiting_user_reply is True, you MUST NOT answer.
+The user is responding to a clarification question, and the Supervisor
+must interpret their message before any conceptual explanation.
+
 Output:
 - Write the human-readable explanation so callers can store it in state["explanation"].
 - Return a dict that includes {"type": "general_knowledge", ... } for state["result"].
