@@ -1,0 +1,205 @@
+Multi-Agent Architecture
+
+                      ┌──────────────────────────────┐
+                      │          STREAMLIT UI        │
+                      │  - Text input (NL query)     │
+                      └───────────────┬──────────────┘
+                                      │  user_query + UI filters
+                                      ▼
+                      ┌─────────────────────────────────────┐
+                      │          SUPERVISOR AGENT           │
+                      │ - Intent detection (pnl / price /   │
+                      │   asset_details / general / other)  │
+                      │ - Entity & property extraction      │
+                      │ - Tenant & period parsing           │
+                      │ - Ledger term → semantic mapping    │
+                      │ - Validation against dataset        │
+                      │ - Routing decisions                 │
+                      │ - Clarification & fallback triggers │
+                      └───────────────┬─────────────────────┘
+                                      │  updates AssetQueryState
+              ┌───────────────────────┼─────────────────────────────┐
+              ▼                       ▼                             ▼
+   ┌───────────────────┐   ┌──────────────────────┐       ┌───────────────────┐
+   │     P&L AGENT     │   │  PRICE COMPARISON    │       │  ASSET DETAILS    │
+   │  (Financial logic)│   │       AGENT          │       │       AGENT       │
+   │ - Use P&L toolkit │   │ - Compare prices     │       │ - Property meta   │
+   │ - Filter & query  │   │ - Δ & % difference   │       │ - Tenant listing  │
+   │   ledger rows     │   │ - Simple scenarios   │       │ - Basic snapshots │
+   │ - Aggregate by:   │   └───────────┬──────────┘       └──────────┬────────┘
+   │   property/tenant │               │                             │
+   │   + period        │               │                             │
+   │ - Breakdown by    │               │                             │
+   │   ledger_type →   │               │                             │
+   │   group → category│               │                             │
+   │ - Revenue,        │               │                             │
+   │   Expenses, NOI   │               │                             │
+   └───────────┬───────┘               │                             │
+               │                       │                             │
+               ▼                       ▼                             ▼
+        ┌───────────────┐      ┌───────────────┐              ┌───────────────┐
+        │   P&L TOOLS   │      │  PRICE TOOLS  │              │ PROPERTY TOOLS│
+        │ - query_ledger│      │ - valuation   │              │ - list props  │
+        │ - compute_pnl │      │ - compare     │              │ - check exists│
+        │ - compare_pnl │      └───────┬───────┘              └───────┬───────┘
+        └─────────┬─────┘              │                              │
+                  │                    │                              │
+                  └──────────┬─────────┴───────────────┬──────────────┘
+                             │                         │
+                             ▼                         ▼
+         ┌───────────────────────────┐        ┌───────────────────────────┐
+         │   LEDGER MAPPER TOOL      │        │    DATA ACCESS LAYER      │
+         │ - free text →             │        │ - Load parquet once      │
+         │   ledger_filter (type /   │        │ - Columns: entity_name,  │
+         │   group / category)       │        │   property_name,         │
+         │ - synonym dictionary      │        │   tenant_name,           │
+         │   (parking, rent,        │        │   ledger_type/group/      │
+         │    discounts, etc.)       │        │   category/code,         │
+         └─────────────┬─────────────┘        │   month, quarter, year,  │
+                       │                      │   profit                 │
+                       │                      │ - Filter by state        │
+                       ▼                      └───────────────────────────┘
+         ┌───────────────────────────┐
+         │  CLARIFICATION AGENT      │
+         │ - Detect missing/ambig:   │
+         │   property / tenant /     │
+         │   period / ledger terms   │
+         │ - Propose question &      │
+         │   options for UI          │
+         │ - Set awaiting_user_reply │
+         └─────────────┬─────────────┘
+                       │
+                       ▼
+              ┌───────────────────────┐
+              │   FALLBACK AGENT      │
+              │ - Unsupported intent  │
+              │ - Invalid formats     │
+              │ - No data found       │
+              │ - Explain limits      │
+              └───────────────────────┘
+
+
+
+Clarification & Error Handling Flow
+                          ┌──────────────────────────┐
+                          │     SUPERVISOR AGENT     │
+                          └─────────────┬────────────┘
+                                        │
+                                        ▼
+                            (Analyze AssetQueryState)
+                                        │
+                   ┌────────────────────┼───────────────────────┐
+                   ▼                    ▼                       ▼
+          ┌────────────────┐   ┌─────────────────────┐   ┌──────────────────┐
+          │  VALID TASK    │   │ MISSING / AMBIGUOUS │   │  UNSUPPORTED /   │
+          │  + SUFFICIENT  │   │   INFORMATION       │   │   INVALID TASK   │
+          │    CONTEXT     │   └─────────┬───────────┘   └─────────┬────────┘
+          └───────┬────────┘             │                         │
+                  │                      │                         │
+                  ▼                      ▼                         ▼
+       Route to specialist     ┌──────────────────────┐     ┌──────────────────┐
+       agent (PnL / Price /    │ CLARIFICATION AGENT  │     │  FALLBACK AGENT  │
+       AssetDetails) with      │ - Detect missing:    │     │ - Explain cannot │
+       current state           │   property / entity  │     │   fulfill request│
+                               │   period (month/qtr/ │     │ - Suggest what   │
+                               │   year)              │     │   user can ask   │
+                               │   tenant             │     │   instead        │
+                               │   ledger terms       │     └──────────────────┘
+                               │ - Ask a single clear │
+                               │   question           │
+                               │ - Provide options    │
+                               │   when possible      │
+                               │ - Set                │
+                               │   awaiting_user_     │
+                               │   reply = True       │
+                               └─────────┬────────────┘
+                                         │
+                                         ▼
+                         ┌────────────────────────────────┐
+                         │  STREAMLIT UI (CLARIFICATION)  │
+                         │  - Show clarification question │
+                         │  - Show options (if any)       │
+                         │  - Next user input is treated  │
+                         │    as an answer, not a new     │
+                         │    query                       │
+                         └─────────────────┬──────────────┘
+                                           │
+                                           ▼
+                          ┌────────────────────────────────┐
+                          │  SUPERVISOR (RESOLVE ANSWER)   │
+                          │  - Update AssetQueryState with │
+                          │    clarified field(s)          │
+                          │  - Set awaiting_user_reply=F   │
+                          │  - Re-run routing (PnL etc.)   │
+                          └────────────────────────────────┘
+
+P&L Aggregation Flow
+                    ┌───────────────────────────┐
+                    │        P&L AGENT          │
+                    └─────────────┬─────────────┘
+                                  │
+                                  ▼
+                     (Read AssetQueryState)
+                                  │
+                                  ▼
+          ┌────────────────────────────────────────────────┐
+          │ VALIDATE INPUTS                                │
+          │ - entity_name present?                         │
+          │ - property_name present & exists?              │
+          │ - period present? (month / quarter / year)     │
+          │ - tenant_name (optional)                       │
+          │ - ledger_filter (optional)                     │
+          └────────────────────────────────────────────────┘
+                                  │
+         ┌────────────────────────┼─────────────────────────┐
+         ▼                        ▼                         ▼
+    All good               Missing / unknown          No rows after
+    → continue             → Clarification Agent      filtering
+                                                       → Fallback: "no data"
+                                  │
+                                  ▼
+       ┌─────────────────────────────────────────────────────┐
+       │ 1) QUERY_LEDGER TOOL                                │
+       │ - Load parquet (cached)                            │
+       │ - Filter by:                                       │
+       │   entity_name, property_name, tenant_name (opt)    │
+       │   AND by chosen period dim:                        │
+       │     • month = "YYYY-MMM"                           │
+       │     • quarter = "YYYY-Qx"                          │
+       │     • year = "YYYY"                                │
+       │   AND by ledger_filter (type/group/category)       │
+       │ - Return matching rows                             │
+       └─────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+       ┌─────────────────────────────────────────────────────┐
+       │ 2) COMPUTE_PNL TOOL                                │
+       │ - Input rows                                       │
+       │ - Drop zero-profit rows for sums (optional)        │
+       │ - Group by chosen hierarchy level(s):              │
+       │   ledger_type → ledger_group → ledger_category     │
+       │ - total_revenue  = Σ profit where ledger_type=rev  │
+       │ - total_expenses = Σ profit where ledger_type=exp  │
+       │ - NOI = total_revenue + total_expenses             │
+       │   (expenses are negative, so this is revenue + exp)│
+       │ - Reversals naturally cancel via signed profit     │
+       └─────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+       ┌─────────────────────────────────────────────────────┐
+       │ 3) OPTIONAL: COMPARE_PNL TOOL                       │
+       │ - When user asks to compare periods (Jan vs Feb,   │
+       │   Q1 vs Q2 etc.):                                  │
+       │   • Query ledger twice with different periods      │
+       │   • Compute P&L per period                         │
+       │   • Δ and %Δ on revenue, expenses, NOI             │
+       └─────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+       ┌─────────────────────────────────────────────────────┐
+       │ 4) FORMAT RESULT                                   │
+       │ - Write structured JSON into AssetQueryState:      │
+       │   { filters_used, totals, breakdowns,              │
+       │     comparisons (if any) }                         │
+       │ - Add human-readable summary text for UI           │
+       └─────────────────────────────────────────────────────┘

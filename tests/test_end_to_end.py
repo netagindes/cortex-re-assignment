@@ -47,9 +47,9 @@ def test_price_query_requests_known_properties():
 
 
 def test_general_query_routes_to_general_agent():
-    state = _invoke("Can you explain what profit and loss means?")
+    state = _invoke("Can you explain how the dataset is structured?")
     assert state.context.request_type == RequestType.GENERAL
-    assert state.result.get("topic") == "pnl_overview"
+    assert state.result.get("topic") == "dataset_overview"
 
 
 def _invoke(message: str) -> GraphState:

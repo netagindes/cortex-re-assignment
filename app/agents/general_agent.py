@@ -10,8 +10,6 @@ from typing import Dict, List
 
 from app import tools
 from app.prompts.general_prompt import GENERAL_KNOWLEDGE_SYSTEM_PROMPT
-
-_P_AND_L_KEYWORDS = ("p&l", "pnl", "profit and loss", "profit & loss", "noi", "net operating income")
 _LEDGER_KEYWORDS = ("ledger", "code", "ledger code", "ledger group", "ledger_category")
 _DATASET_KEYWORDS = ("dataset", "portfolio", "data", "assets", "profit column")
 _PERIOD_KEYWORDS = ("month", "quarter", "year", "period", "2025-", "-m0", "-q")
@@ -27,8 +25,6 @@ class GeneralKnowledgeAgent:
 
     def run(self, user_input: str) -> Dict[str, object]:
         lowered = user_input.lower()
-        if any(keyword in lowered for keyword in _P_AND_L_KEYWORDS):
-            return self._response(topic="pnl_overview", message=self._explain_pnl())
         if any(keyword in lowered for keyword in _LEDGER_KEYWORDS):
             return self._response(topic="ledger_explanation", message=self._explain_ledger(user_input))
         if any(keyword in lowered for keyword in _PERIOD_KEYWORDS):
@@ -46,13 +42,6 @@ class GeneralKnowledgeAgent:
         if details:
             payload.update(details)
         return payload
-
-    @staticmethod
-    def _explain_pnl() -> str:
-        return (
-            "Profit & Loss (P&L) sums the signed profit column for the rows that match a filter. "
-            "Revenues are positive, expenses are negative, so P&L = Σ(profit) for the requested period and scope."
-        )
 
     def _explain_ledger(self, user_input: str) -> str:
         code = self._extract_ledger_code(user_input)
@@ -80,13 +69,10 @@ class GeneralKnowledgeAgent:
 
     @staticmethod
     def _capabilities_overview() -> str:
-        bullets: List[str] = [
-            "Explain how revenues vs expenses roll into NOI.",
-            "Clarify how ledger groups identify parking, rent, or discounts.",
-            "Describe how P&L calculations rely on the signed profit column.",
-            "Outline how months ('2025-M03') and quarters ('2025-Q1') drive filtering.",
-        ]
-        return "Key concepts:\n- " + "\n- ".join(bullets)
+        return (
+            "I can clarify ledger hierarchies, describe the dataset columns, and explain how period labels like "
+            "'2025-M03' or '2025-Q1' control filtering—always conceptually and without numeric results."
+        )
 
     @staticmethod
     def _extract_ledger_code(user_input: str) -> str | None:

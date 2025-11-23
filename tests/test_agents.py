@@ -208,9 +208,9 @@ def test_pnl_agent_comparison_requires_two_periods():
     assert "comparison_period_count_invalid" in result.get("errors", [])
 
 
-def test_general_agent_pnl_overview():
+def test_general_agent_handles_ledger_questions():
     agent = GeneralKnowledgeAgent()
-    response = agent.run("What is P&L and how do you calculate it?")
-    assert response["topic"] == "pnl_overview"
-    assert "Profit & Loss" in response["message"]
+    response = agent.run("Explain ledger code 120.")
+    assert response["topic"] == "ledger_explanation"
+    assert "ledger" in response["message"].lower()
 

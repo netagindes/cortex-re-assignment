@@ -5,19 +5,66 @@ Supervisor agent responsible for classifying and routing user queries.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-import re
-
 from app import tools
 from app.agents.intent_parser import IntentParseResult, IntentParser
-from app.agents.request_types import RequestType, request_definition_for
-from app.knowledge import PropertyMatch
+from app.agents.request_types import RequestType, normalize_request_type, request_definition_for
+from app.classifier import ClassificationLayer, ClassificationResult
 from app.graph.state import ClarificationItem, QueryContext
+from app.knowledge import PropertyMatch
 from app.prompts.supervisor_prompt import SUPERVISOR_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
+
+_PERIOD_YEAR_PATTERN = re.compile(r"^(20\d{2})$")
+_PERIOD_MONTH_PATTERN = re.compile(r"^(?P<year>20\d{2})-M(?P<month>\d{2})$")
+_PERIOD_QUARTER_PATTERN = re.compile(r"^(?P<year>20\d{2})-(?P<quarter>Q[1-4])$")
+
+
+def _interpret_period_label(
+    label: Optional[str],
+) -> tuple[Optional[str], Optional[str], Optional[int], Optional[str], Optional[str]]:
+    if not label:
+        return None, None, None, None, None
+    text = label.strip()
+    if not text:
+        return None, None, None, None, None
+    candidate = text.upper()
+
+    month_match = _PERIOD_MONTH_PATTERN.match(candidate)
+    if month_match:
+        year = int(month_match.group("year"))
+        normalized = f"{year}-M{month_match.group('month')}"
+        return normalized, "month", year, None, normalized
+
+    quarter_match = _PERIOD_QUARTER_PATTERN.match(candidate)
+    if quarter_match:
+        year = int(quarter_match.group("year"))
+        quarter = quarter_match.group("quarter").upper()
+        normalized = f"{year}-{quarter}"
+        return normalized, "quarter", year, normalized, None
+
+    year_match = _PERIOD_YEAR_PATTERN.match(candidate)
+    if year_match:
+        year = int(year_match.group(1))
+        return str(year), "year", year, None, None
+
+    return candidate, None, None, None, None
+
+
+def _comparison_payload_from_label(label: str) -> Optional[Dict[str, Any]]:
+    normalized, level, year, quarter, month = _interpret_period_label(label)
+    if not normalized or level is None or year is None:
+        return None
+    payload: Dict[str, Any] = {"label": normalized, "level": level, "year": year}
+    if quarter:
+        payload["quarter"] = quarter
+    if month:
+        payload["month"] = month
+    return payload
 
 
 @dataclass
@@ -58,12 +105,14 @@ class SupervisorAgent:
     """
 
     SYSTEM_PROMPT: str = SUPERVISOR_SYSTEM_PROMPT
-    intent_parser: IntentParser = field(default_factory=IntentParser)
+    intent_parser: IntentParser = field(default_factory=lambda: IntentParser(enable_llm=False))
+    classification_layer: ClassificationLayer = field(default_factory=ClassificationLayer)
     _cached_input: Optional[str] = field(default=None, init=False, repr=False)
     _cached_result: Optional[IntentParseResult] = field(default=None, init=False, repr=False)
 
     def classify(self, user_input: str) -> RequestType:
-        return self._parse(user_input).request_type
+        result = self.classification_layer.classify(user_input or "")
+        return self._map_request_type(result.request_type)
 
     def analyze(self, context_or_input: QueryContext | str) -> SupervisorDecision:
         if isinstance(context_or_input, QueryContext):
@@ -81,10 +130,16 @@ class SupervisorAgent:
         return self._classify_new_request(context)
 
     def _classify_new_request(self, context: QueryContext) -> SupervisorDecision:
-        user_input = context.user_input
+        user_input = context.user_input or ""
+        classifier_result = self.classification_layer.classify(user_input)
         parse_result = self._parse(user_input)
-        request_type = parse_result.request_type
+
+        request_type = self._map_request_type(classifier_result.request_type)
         definition = request_definition_for(request_type)
+
+        combined_address_terms = list(
+            dict.fromkeys(parse_result.address_terms + (classifier_result.addresses or []))
+        )
 
         max_matches = 4 if request_type == RequestType.PRICE_COMPARISON else 2
         property_resolution = tools.resolve_properties(user_input, max_matches=max_matches)
@@ -97,11 +152,12 @@ class SupervisorAgent:
         addresses = [match.address for match in primary_matches]
 
         period_info = tools.extract_period_hint(user_input)
-        period = period_info.get("label")
-        period_level = period_info.get("level")
-        year = period_info.get("year")
-        quarter = period_info.get("quarter")
-        month = period_info.get("month")
+        period, period_level, year, quarter, month = _interpret_period_label(classifier_result.period)
+        period = period or period_info.get("label")
+        period_level = period_level or period_info.get("level")
+        year = year if year is not None else period_info.get("year")
+        quarter = quarter or period_info.get("quarter")
+        month = month or period_info.get("month")
         tenants = tools.extract_tenant_names(user_input)
 
         property_name = None
@@ -110,28 +166,43 @@ class SupervisorAgent:
             primary = primary_matches[0]
             property_name = primary.property_name or primary.address
             entity_name = entity_name or primary.metadata.get("entity")
-        elif request_type in {RequestType.ASSET_DETAILS, RequestType.PRICE_COMPARISON} and parse_result.address_terms:
-            property_name = parse_result.address_terms[0]
+        elif request_type in {RequestType.ASSET_DETAILS, RequestType.PRICE_COMPARISON} and combined_address_terms:
+            property_name = combined_address_terms[0]
 
         tenant_name = parse_result.tenant_name or (tenants[0] if tenants else None)
-        missing: List[str] = list(parse_result.missing_fields or [])
+        missing: List[str] = list(
+            dict.fromkeys((classifier_result.missing_fields or []) + (parse_result.missing_fields or []))
+        )
 
         comparison_markers = bool(parse_result.comparison_markers)
         text_lower = user_input.lower()
         if not comparison_markers:
             comparison_markers = bool(re.search(r"\b(compare|versus|vs\.?|between|difference)\b", text_lower))
+        if classifier_result.comparison_periods:
+            comparison_markers = True
 
-        is_pnl_comparison = request_type == RequestType.PNL and comparison_markers
-        comparison_periods = tools.extract_comparison_periods(user_input, max_periods=2) if is_pnl_comparison else []
-        if is_pnl_comparison and comparison_periods:
+        classifier_comparisons = [
+            payload for payload in (_comparison_payload_from_label(label) for label in (classifier_result.comparison_periods or []))
+            if payload
+        ]
+        comparison_periods: List[Dict[str, Any]] = []
+        if len(classifier_comparisons) == 2:
+            comparison_periods = classifier_comparisons
+
+        tool_periods: List[Dict[str, Any]] = []
+        if request_type == RequestType.PNL and (comparison_markers or classifier_comparisons):
+            tool_periods = tools.extract_comparison_periods(user_input, max_periods=2)
+        if tool_periods:
+            comparison_periods = tool_periods
+        elif not comparison_periods:
+            comparison_periods = classifier_comparisons
+
+        if comparison_periods:
             period = comparison_periods[0]["label"]
             period_level = comparison_periods[0].get("level")
             year = None
             quarter = None
-            month = None
-        elif period_info.get("label"):
-            period = period_info.get("label")
-            period_level = period_info.get("level")
+            month = comparison_periods[0].get("month")
 
         if request_type == RequestType.PRICE_COMPARISON and len(addresses) < 2 and "second_property" not in missing:
             missing.append("second_property")
@@ -151,7 +222,7 @@ class SupervisorAgent:
         if aggregation_required and "aggregation_level" not in missing:
             missing.append("aggregation_level")
 
-        if is_pnl_comparison:
+        if comparison_periods:
             if len(comparison_periods) != 2 and "comparison_periods" not in missing:
                 missing.append("comparison_periods")
             explicit_property_count = len(explicit_matches)
@@ -160,20 +231,24 @@ class SupervisorAgent:
             if not resolved_matches and "property" not in missing:
                 missing.append("property")
 
+        missing = list(dict.fromkeys(missing))
         needs_clarification = bool(missing)
         serialized_matches = [self._serialize_match(match) for match in matches]
         suggested_addresses = self._suggest_addresses(matches, addresses)
         notes = list(parse_result.notes)
+        if classifier_result.request_type and classifier_result.request_type != request_type.value:
+            notes.append(f"Classifier intent override: {classifier_result.request_type}")
         if property_resolution.unresolved_terms:
             notes.append(f"Unresolved mentions: {', '.join(property_resolution.unresolved_terms)}")
         if property_resolution.missing_assets:
             notes.append(f"Not in dataset: {', '.join(property_resolution.missing_assets)}")
 
         logger.info(
-            "Supervisor analysis: request_type=%s addresses=%s period=%s",
+            "Supervisor analysis: request_type=%s addresses=%s period=%s classifier_intent=%s",
             request_type.value if isinstance(request_type, RequestType) else request_type,
             addresses,
             period,
+            classifier_result.request_type,
         )
         return SupervisorDecision(
             request_type=request_type,
@@ -198,6 +273,18 @@ class SupervisorAgent:
             measurement_id=definition.measurement_id,
             comparison_periods=comparison_periods,
         )
+
+    def _map_request_type(self, value: Optional[str]) -> RequestType:
+        if isinstance(value, RequestType):
+            return value
+        if value is None:
+            return RequestType.GENERAL
+        normalized = str(value).strip().lower()
+        if not normalized:
+            return RequestType.GENERAL
+        if normalized == "unsupported":
+            return RequestType.CLARIFICATION
+        return normalize_request_type(normalized)
 
     def _handle_follow_up(self, context: QueryContext) -> SupervisorDecision:
         last_item = context.clarifications[-1]
