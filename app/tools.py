@@ -257,6 +257,21 @@ _MONTH_MAP = {
     "december": "M12",
 }
 
+_MONTH_REGEX = re.compile(
+    r"\b(?P<month>january|february|march|april|may|june|july|august|september|october|november|december)\b"
+    r"(?:\s+(?P<year>20\d{2}))?",
+    flags=re.IGNORECASE,
+)
+_MONTH_YEAR_LEADING_REGEX = re.compile(
+    r"\b(?P<year>20\d{2})\b\s+(?P<month>january|february|march|april|may|june|july|august|september|october|november|december)\b",
+    flags=re.IGNORECASE,
+)
+_QUARTER_REGEX = re.compile(
+    r"\b(?:(?P<year>20\d{2})[-\s]*(?P<quarter>q[1-4])|(?P<quarter_alt>q[1-4])[-\s]*(?P<year_alt>20\d{2}))\b",
+    flags=re.IGNORECASE,
+)
+_YEAR_ONLY_REGEX = re.compile(r"\b(20\d{2})\b")
+
 
 def extract_period_hint(text: str) -> Dict[str, Optional[str] | Optional[int]]:
     """
@@ -330,6 +345,110 @@ def extract_period_hint(text: str) -> Dict[str, Optional[str] | Optional[int]]:
         return build_response(label=str(year), level="year", year=year)
 
     return build_response()
+
+
+def extract_comparison_periods(text: str, max_periods: int = 2) -> List[Dict[str, Optional[str] | Optional[int]]]:
+    """
+    Extract up to `max_periods` distinct period references (month/quarter/year) in the order they appear.
+    """
+
+    lowered = text.lower()
+    matches: List[Tuple[int, Dict[str, Any]]] = []
+    covered_ranges: List[Tuple[int, int]] = []
+
+    def _record_month(start: int, end: int, month_name: str, year: Optional[int]) -> None:
+        matches.append((start, {"kind": "month", "month_name": month_name.lower(), "year": year}))
+        covered_ranges.append((start, end))
+
+    def _record_quarter(start: int, end: int, quarter_code: str, year: Optional[int]) -> None:
+        matches.append((start, {"kind": "quarter", "quarter": quarter_code.upper(), "year": year}))
+        covered_ranges.append((start, end))
+
+    for match in _MONTH_REGEX.finditer(lowered):
+        month_name = match.group("month")
+        year = match.group("year")
+        _record_month(match.start(), match.end(), month_name, int(year) if year else None)
+
+    for match in _MONTH_YEAR_LEADING_REGEX.finditer(lowered):
+        month_name = match.group("month")
+        year = int(match.group("year"))
+        _record_month(match.start("month"), match.end("month"), month_name, year)
+
+    for match in _QUARTER_REGEX.finditer(lowered):
+        quarter = match.group("quarter") or match.group("quarter_alt")
+        year_str = match.group("year") or match.group("year_alt")
+        year = int(year_str) if year_str else None
+        _record_quarter(match.start(), match.end(), quarter, year)
+
+    def _range_contains(position: int) -> bool:
+        return any(start <= position <= end for start, end in covered_ranges)
+
+    for match in _YEAR_ONLY_REGEX.finditer(lowered):
+        if _range_contains(match.start()):
+            continue
+        year = int(match.group(1))
+        matches.append((match.start(), {"kind": "year", "year": year}))
+
+    if not matches:
+        return []
+
+    matches.sort(key=lambda item: item[0])
+    pending_indices: List[int] = []
+    last_year: Optional[int] = None
+
+    for idx, (_, data) in enumerate(matches):
+        kind = data["kind"]
+        if kind == "year":
+            last_year = data["year"]
+            if pending_indices:
+                for pending_idx in pending_indices:
+                    matches[pending_idx][1]["year"] = last_year
+                pending_indices.clear()
+        elif kind in {"month", "quarter"}:
+            if data.get("year") is not None:
+                last_year = data["year"]
+                if pending_indices:
+                    for pending_idx in pending_indices:
+                        matches[pending_idx][1]["year"] = last_year
+                    pending_indices.clear()
+            else:
+                if last_year is not None:
+                    data["year"] = last_year
+                else:
+                    pending_indices.append(idx)
+
+    def _month_payload(month_name: str, year: Optional[int]) -> Optional[Dict[str, Optional[str] | Optional[int]]]:
+        if year is None:
+            return None
+        code = _MONTH_MAP.get(month_name.lower())
+        if not code:
+            return None
+        label = f"{year}-{code}"
+        return {"label": label, "level": "month", "year": year, "month": label}
+
+    def _quarter_payload(quarter_code: str, year: Optional[int]) -> Optional[Dict[str, Optional[str] | Optional[int]]]:
+        if year is None:
+            return None
+        label = f"{year}-{quarter_code.upper()}"
+        return {"label": label, "level": "quarter", "year": year, "quarter": label}
+
+    periods: List[Dict[str, Optional[str] | Optional[int]]] = []
+    for _, data in matches:
+        payload: Optional[Dict[str, Optional[str] | Optional[int]]] = None
+        if data["kind"] == "month":
+            payload = _month_payload(data["month_name"], data.get("year"))
+        elif data["kind"] == "quarter":
+            payload = _quarter_payload(data["quarter"], data.get("year"))
+        elif data["kind"] == "year":
+            year = data.get("year")
+            if year is not None:
+                payload = {"label": str(year), "level": "year", "year": year}
+        if payload and payload not in periods:
+            periods.append(payload)
+            if len(periods) >= max_periods:
+                break
+
+    return periods
 
 
 # --------------------------------------------------------------------------------------

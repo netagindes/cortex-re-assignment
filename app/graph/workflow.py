@@ -86,6 +86,7 @@ def _classify_node(state: GraphState) -> GraphState:
     state.context.year = decision.year
     state.context.quarter = decision.quarter
     state.context.month = decision.month
+    state.context.comparison_periods = decision.comparison_periods
     state.context.needs_clarification = decision.needs_clarification
     state.context.clarification_reasons = decision.missing_requirements
     state.log(
@@ -190,6 +191,8 @@ def _pnl_node(state: GraphState) -> GraphState:
         task = _build_pnl_task(state.context)
         state.result = pnl_agent.run(task)
         state.pnl_result = state.result
+        if isinstance(state.result, dict) and state.result.get("message"):
+            state.explanation = state.result["message"]
     except ValueError as exc:
         state.result = {"message": str(exc)}
         state.log(
@@ -199,12 +202,16 @@ def _pnl_node(state: GraphState) -> GraphState:
             error=str(exc),
         )
         return state
-    state.log(
-        "PnL aggregation completed",
-        agent="pnl_agent",
-        requirement_section="req3-processing",
-        total=state.result["value"],
-    )
+    log_data: Dict[str, Any] = {
+        "agent": "pnl_agent",
+        "requirement_section": "req3-processing",
+    }
+    if isinstance(state.result, dict):
+        if "value" in state.result:
+            log_data["total"] = state.result["value"]
+        elif state.result.get("mode") == "comparison":
+            log_data["mode"] = "comparison"
+    state.log("PnL aggregation completed", **log_data)
     return state
 
 
@@ -226,14 +233,22 @@ def _build_pnl_task(context: QueryContext) -> Dict[str, Any]:
             month = month or normalized
             year = year or int(normalized[:4])
 
+    comparison_periods = context.comparison_periods or []
     level = context.period_level
-    if level is None:
-        if month:
-            level = "month"
-        elif quarter:
-            level = "quarter"
-        else:
-            level = "year"
+    if comparison_periods:
+        label = None
+        level = None
+        year = None
+        quarter = None
+        month = None
+    else:
+        if level is None:
+            if month:
+                level = "month"
+            elif quarter:
+                level = "quarter"
+            else:
+                level = "year"
 
     return {
         "entity_name": context.entity_name,
@@ -244,6 +259,7 @@ def _build_pnl_task(context: QueryContext) -> Dict[str, Any]:
         "month": month.upper() if isinstance(month, str) else month,
         "level": level,
         "label": label,
+        "comparison_periods": comparison_periods,
     }
 
 
@@ -289,6 +305,8 @@ def _clarification_node(state: GraphState) -> GraphState:
 def _general_node(state: GraphState) -> GraphState:
     state.log("General knowledge node entered", agent="general_agent", requirement_section="req3-processing")
     state.result = general_agent.run(state.context.user_input)
+    if state.result:
+        state.explanation = state.result.get("message")
     state.log(
         "General knowledge response generated",
         agent="general_agent",

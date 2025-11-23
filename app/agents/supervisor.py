@@ -8,10 +8,13 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+import re
+
 from app import tools
 from app.agents.intent_parser import IntentParseResult, IntentParser
 from app.agents.request_types import RequestType, request_definition_for
 from app.knowledge import PropertyMatch
+from app.prompts.supervisor_prompt import SUPERVISOR_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -38,14 +41,19 @@ class SupervisorDecision:
     quarter: Optional[str] = None
     month: Optional[str] = None
     measurement_id: Optional[str] = None
+    comparison_periods: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
 class SupervisorAgent:
     """
     Intent-aware classifier that routes user queries to the appropriate agent.
+
+    The `SYSTEM_PROMPT` field surfaces the canonical supervisor instructions so any
+    future LLM-driven Supervisor node can bind the same routing/clarification rules.
     """
 
+    SYSTEM_PROMPT: str = SUPERVISOR_SYSTEM_PROMPT
     intent_parser: IntentParser = field(default_factory=IntentParser)
     _cached_input: Optional[str] = field(default=None, init=False, repr=False)
     _cached_result: Optional[IntentParseResult] = field(default=None, init=False, repr=False)
@@ -61,7 +69,11 @@ class SupervisorAgent:
         max_matches = 4 if request_type == RequestType.PRICE_COMPARISON else 2
         property_resolution = tools.resolve_properties(user_input, max_matches=max_matches)
         matches = property_resolution.matches
-        primary_matches = matches[:2]
+        dataset_matches = [match for match in matches if match.metadata]
+        explicit_matches = [match for match in dataset_matches if match.reason == "Alias or direct match"]
+        resolved_matches = explicit_matches or dataset_matches
+        address_limit = 2 if request_type == RequestType.PRICE_COMPARISON else 1
+        primary_matches = resolved_matches[:address_limit]
         addresses = [match.address for match in primary_matches]
 
         period_info = tools.extract_period_hint(user_input)
@@ -84,11 +96,28 @@ class SupervisorAgent:
         tenant_name = parse_result.tenant_name or (tenants[0] if tenants else None)
         missing: List[str] = list(parse_result.missing_fields or [])
 
+        comparison_markers = bool(parse_result.comparison_markers)
+        text_lower = user_input.lower()
+        if not comparison_markers:
+            comparison_markers = bool(re.search(r"\b(compare|versus|vs\.?|between|difference)\b", text_lower))
+
+        is_pnl_comparison = request_type == RequestType.PNL and comparison_markers
+        comparison_periods = tools.extract_comparison_periods(user_input, max_periods=2) if is_pnl_comparison else []
+        if is_pnl_comparison and comparison_periods:
+            period = comparison_periods[0]["label"]
+            period_level = comparison_periods[0].get("level")
+            year = None
+            quarter = None
+            month = None
+        elif period_info.get("label"):
+            period = period_info.get("label")
+            period_level = period_info.get("level")
+
         if request_type == RequestType.PRICE_COMPARISON and len(addresses) < 2 and "second_property" not in missing:
             missing.append("second_property")
         if request_type == RequestType.ASSET_DETAILS and not addresses and "property" not in missing:
             missing.append("property")
-        if request_type == RequestType.PNL and not any([period, year, quarter, month]):
+        if request_type == RequestType.PNL and not any([period, year, quarter, month]) and not comparison_periods:
             missing.append("period")
         granularity_required = (
             request_type == RequestType.PNL
@@ -101,6 +130,15 @@ class SupervisorAgent:
         )
         if granularity_required and "granularity" not in missing:
             missing.append("granularity")
+
+        if is_pnl_comparison:
+            if len(comparison_periods) != 2 and "comparison_periods" not in missing:
+                missing.append("comparison_periods")
+            explicit_property_count = len(explicit_matches)
+            if explicit_property_count > 1 and "property_selection" not in missing:
+                missing.append("property_selection")
+            if not resolved_matches and "property" not in missing:
+                missing.append("property")
 
         needs_clarification = bool(missing)
         serialized_matches = [self._serialize_match(match) for match in matches]
@@ -138,6 +176,7 @@ class SupervisorAgent:
             quarter=quarter,
             month=month,
             measurement_id=definition.measurement_id,
+            comparison_periods=comparison_periods,
         )
 
     def _suggest_addresses(self, matches: List[PropertyMatch], resolved: List[str]) -> List[str]:

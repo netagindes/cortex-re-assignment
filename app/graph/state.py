@@ -34,12 +34,14 @@ class QueryContext:
     needs_clarification: bool = False
     clarification_reasons: List[str] = field(default_factory=list)
     request_measurement: Optional[str] = None
+    comparison_periods: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
 class GraphState:
     context: QueryContext
     result: Optional[Dict[str, Any]] = None
+    explanation: Optional[str] = None
     diagnostics: List[PipelineLogEntry] = field(default_factory=list)
     logger: PipelineLogger | None = field(default=None, repr=False)
     pnl_result: Optional[Dict[str, Any]] = None

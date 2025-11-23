@@ -32,3 +32,26 @@ def test_format_response_prioritizes_pnl_layout_over_embedded_message():
     assert "Total P&L (2025)" in text
     assert formatted_value in text
 
+
+def test_format_response_handles_comparison_results():
+    comparison_payload = {
+        "mode": "comparison",
+        "comparison": {
+            "periods": [
+                {"label": "2025-M01", "formatted": format_currency(100.0), "totals_summary": {"total_revenue": 100.0, "total_expenses": -20.0}},
+                {"label": "2025-M02", "formatted": format_currency(120.0), "totals_summary": {"total_revenue": 120.0, "total_expenses": -30.0}},
+            ],
+            "delta": {
+                "total_revenue": 20.0,
+                "total_expenses": -10.0,
+                "net_operating_income": 10.0,
+                "noi_percent_change": 10.0,
+            },
+        },
+        "message": "Comparison summary.",
+    }
+    text, _ = _format_response(_state(comparison_payload, RequestType.PNL))
+    assert "2025-M01" in text
+    assert "2025-M02" in text
+    assert "Difference" in text
+

@@ -66,7 +66,26 @@ def test_supervisor_routes_timebound_pnl_comparisons():
     assert decision.request_type == RequestType.PNL
     assert not decision.needs_clarification
     assert decision.addresses
-    assert "Building 180" in decision.addresses
+    assert decision.property_name == "Building 180"
+    assert len(decision.comparison_periods) == 2
+    labels = [period["label"] for period in decision.comparison_periods]
+    assert labels == ["2025-M01", "2025-M02"]
+
+
+def test_supervisor_requires_two_periods_for_comparison():
+    agent = SupervisorAgent()
+    decision = agent.analyze("Compare January 2025 P&L for Building 180.")
+    assert decision.request_type == RequestType.PNL
+    assert decision.needs_clarification
+    assert "comparison_periods" in decision.missing_requirements
+
+
+def test_supervisor_requires_single_property_for_pnl_comparison():
+    agent = SupervisorAgent()
+    decision = agent.analyze("Compare January and February 2025 P&L for Building 180 and Building 140.")
+    assert decision.request_type == RequestType.PNL
+    assert decision.needs_clarification
+    assert "property_selection" in decision.missing_requirements
 
 
 def test_clarification_message_includes_suggestions():
@@ -107,6 +126,38 @@ def test_pnl_agent_no_data_message_is_friendly():
     assert result["status"] == "no_data"
     assert "couldn't find any financial data" in result["message"].lower()
     assert "tenant-level, property-level, or combined totals" in result["message"]
+
+
+def test_pnl_agent_comparison_mode_handles_two_periods():
+    agent = PnLAgent()
+    task = {
+        "property_name": "Building 17",
+        "comparison_periods": [
+            {"label": "2025-M01", "level": "month", "year": 2025, "month": "2025-M01"},
+            {"label": "2025-M02", "level": "month", "year": 2025, "month": "2025-M02"},
+        ],
+    }
+    result = agent.run(task)
+    assert result["status"] == "ok"
+    assert result["mode"] == "comparison"
+    comparison = result["comparison"]
+    assert len(comparison["periods"]) == 2
+    delta = comparison["delta"]
+    assert delta["net_operating_income"] == pytest.approx(0.0, abs=0.01)
+
+
+def test_pnl_agent_comparison_requires_two_periods():
+    agent = PnLAgent()
+    result = agent.run(
+        {
+            "property_name": "Building 17",
+            "comparison_periods": [
+                {"label": "2025-M01", "level": "month", "year": 2025, "month": "2025-M01"},
+            ],
+        }
+    )
+    assert result["status"] == "error"
+    assert "comparison_period_count_invalid" in result.get("errors", [])
 
 
 def test_general_agent_pnl_overview():

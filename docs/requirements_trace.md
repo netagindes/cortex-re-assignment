@@ -11,6 +11,11 @@ This document tracks how the current implementation aligns with the assignment's
 | Specialist agents | `app/agents/*.py` (PriceComparisonAgent, PnLAgent, AssetDetailsAgent, GeneralKnowledgeAgent, ClarificationAgent) encapsulate tool access & business logic. | General agent answers dataset/ledger/how-to prompts. |
 | Shared state/logging | `app/graph/state.py` and `app/logging_utils.py` keep context + pipeline diagnostic stream for UI/API. |  |
 | UI/API entrypoints | `/chat` FastAPI (`app/api/main.py`) + Streamlit UI (`app/ui/streamlit_app.py`). |  |
+| Supervisor prompt | `app/prompts/supervisor_prompt.py` defines `SUPERVISOR_SYSTEM_PROMPT`, surfaced via `SupervisorAgent.SYSTEM_PROMPT`. | Codifies routing/clarification rules for future LLM-driven supervisor. |
+| General knowledge prompt | `app/prompts/general_prompt.py` defines `GENERAL_KNOWLEDGE_SYSTEM_PROMPT`, referenced by `GeneralKnowledgeAgent.SYSTEM_PROMPT`. | Restricts answers to conceptual guidance (no calculations or dataset lookups). |
+| P&L prompt | `app/prompts/pnl_prompt.py` defines `PNL_SYSTEM_PROMPT`, referenced by `PnLAgent.SYSTEM_PROMPT`. | Documents aggregation rules (periods, ledger hierarchy, comparison logic). |
+| Asset details prompt | `app/prompts/asset_prompt.py` defines `ASSET_DETAILS_SYSTEM_PROMPT`, referenced by `AssetDetailsAgent.SYSTEM_PROMPT`. | Ensures descriptive-only responses and property existence checks. |
+| Clarification prompt | `app/prompts/clarification_prompt.py` defines `CLARIFICATION_SYSTEM_PROMPT`, surfaced via `ClarificationAgent.SYSTEM_PROMPT`. | Documented guardrails for missing-field questions. |
 
 ## Requirement 2 – Natural-language Input (Status: ✅ Met)
 

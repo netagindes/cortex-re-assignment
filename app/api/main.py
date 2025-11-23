@@ -166,6 +166,36 @@ def _format_response(state: GraphState) -> Tuple[str, str | None]:
         lines.append(diff_line)
         return ("\n".join(lines), result.get("note"))
 
+    if request_type == RequestType.PNL and result.get("mode") == "comparison":
+        comparison = result.get("comparison") or {}
+        periods = comparison.get("periods") or []
+        lines: List[str] = []
+        for entry in periods:
+            label = entry.get("label", "period")
+            formatted = entry.get("formatted", "")
+            lines.append(f"{label}: {formatted}")
+            summary = entry.get("totals_summary") or {}
+            if summary:
+                lines.append(
+                    "Summary: "
+                    f"Revenue {format_currency(summary.get('total_revenue', 0.0))}, "
+                    f"Expenses {format_currency(summary.get('total_expenses', 0.0))}"
+                )
+        delta = comparison.get("delta") or {}
+        if delta:
+            lines.append(
+                "Difference (second minus first): "
+                f"Revenue {format_currency(delta.get('total_revenue', 0.0))}, "
+                f"Expenses {format_currency(delta.get('total_expenses', 0.0))}, "
+                f"NOI {format_currency(delta.get('net_operating_income', 0.0))}"
+            )
+            pct = delta.get("noi_percent_change")
+            if pct is not None:
+                lines.append(f"NOI % change: {pct:.2f}%")
+        if result.get("message"):
+            lines.append(result["message"])
+        return ("\n".join(lines), result.get("note"))
+
     if request_type == RequestType.PNL and {"label", "formatted"} <= result.keys():
         lines = [f"{result['label']}: {result['formatted']}"]
         summary = result.get("totals_summary") or {}
@@ -231,6 +261,7 @@ def _build_metadata(state: GraphState) -> Dict[str, Any] | None:
         "quarter": state.context.quarter,
         "month": state.context.month,
         "request_measurement": state.context.request_measurement,
+        "comparison_periods": state.context.comparison_periods,
     }
 
     result = state.result

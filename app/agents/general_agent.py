@@ -1,5 +1,5 @@
 """
-General-knowledge agent that answers portfolio, ledger, and concept questions.
+General-knowledge agent that answers conceptual questions about the dataset and metrics.
 """
 
 from __future__ import annotations
@@ -9,13 +9,12 @@ from dataclasses import dataclass
 from typing import Dict, List
 
 from app import tools
-from app.data_layer import load_assets
-from app.data_layer import summarize_assets
+from app.prompts.general_prompt import GENERAL_KNOWLEDGE_SYSTEM_PROMPT
 
-
-_P_AND_L_KEYWORDS = ("p&l", "pnl", "profit and loss", "profit & loss", "noi")
-_LEDGER_KEYWORDS = ("ledger", "code", "ledger code", "ledger group")
-_DATASET_KEYWORDS = ("dataset", "portfolio", "data", "assets")
+_P_AND_L_KEYWORDS = ("p&l", "pnl", "profit and loss", "profit & loss", "noi", "net operating income")
+_LEDGER_KEYWORDS = ("ledger", "code", "ledger code", "ledger group", "ledger_category")
+_DATASET_KEYWORDS = ("dataset", "portfolio", "data", "assets", "profit column")
+_PERIOD_KEYWORDS = ("month", "quarter", "year", "period", "2025-", "-m0", "-q")
 
 
 @dataclass
@@ -24,78 +23,70 @@ class GeneralKnowledgeAgent:
     Provides concise explanations that don't require a numeric computation.
     """
 
+    SYSTEM_PROMPT: str = GENERAL_KNOWLEDGE_SYSTEM_PROMPT
+
     def run(self, user_input: str) -> Dict[str, object]:
         lowered = user_input.lower()
         if any(keyword in lowered for keyword in _P_AND_L_KEYWORDS):
-            return self._explain_pnl()
+            return self._response(topic="pnl_overview", message=self._explain_pnl())
         if any(keyword in lowered for keyword in _LEDGER_KEYWORDS):
-            return self._explain_ledger(user_input)
+            return self._response(topic="ledger_explanation", message=self._explain_ledger(user_input))
+        if any(keyword in lowered for keyword in _PERIOD_KEYWORDS):
+            return self._response(topic="period_filtering", message=self._explain_periods())
         if any(keyword in lowered for keyword in _DATASET_KEYWORDS):
-            return self._summarize_dataset()
-        return self._capabilities_overview()
+            return self._response(topic="dataset_overview", message=self._summarize_dataset())
+        return self._response(topic="capabilities_overview", message=self._capabilities_overview())
 
-    def _explain_pnl(self) -> Dict[str, object]:
-        steps = [
-            "Gather ledger rows (revenue and expenses) for the requested period.",
-            "Group by the requested granularity (month, quarter, year, property, or tenant).",
-            "Aggregate totals and report revenue, expenses, and net operating income.",
-        ]
-        message = (
-            "Profit & Loss (P&L) reports total revenue, expenses, and net operating income "
-            "for the period you specify. Ask for a year, quarter, or month—and optionally a property "
-            "or tenant—to trigger the P&L agent."
-        )
-        return {
-            "topic": "pnl_overview",
+    def _response(self, *, topic: str, message: str, details: Dict[str, object] | None = None) -> Dict[str, object]:
+        payload: Dict[str, object] = {
+            "type": "general_knowledge",
+            "topic": topic,
             "message": message,
-            "steps": steps,
-            "next_actions": "Example: 'Show tenant 14 P&L for 2025-Q1.'",
         }
+        if details:
+            payload.update(details)
+        return payload
 
-    def _explain_ledger(self, user_input: str) -> Dict[str, object]:
+    @staticmethod
+    def _explain_pnl() -> str:
+        return (
+            "Profit & Loss (P&L) sums the signed profit column for the rows that match a filter. "
+            "Revenues are positive, expenses are negative, so P&L = Σ(profit) for the requested period and scope."
+        )
+
+    def _explain_ledger(self, user_input: str) -> str:
         code = self._extract_ledger_code(user_input)
-        details = tools.explain_ledger_code(code) if code else "Ledger codes group expenses/revenue into categories like OPEX or Parking."
-        message = (
-            "Ledger descriptions come straight from the dataset. "
-            "Provide a specific ledger code to retrieve its category or group."
+        if code:
+            explanation = tools.explain_ledger_code(code)
+            return explanation or "Ledger codes roll up into ledger_group and ledger_category to describe account purpose."
+        return (
+            "Ledgers form a hierarchy: ledger_type → ledger_group → ledger_category. "
+            "They describe whether a row represents revenue, expenses, parking income, discounts, etc."
         )
-        return {
-            "topic": "ledger_explanation",
-            "message": message,
-            "details": details,
-            "next_actions": "Example: 'Explain ledger code 5100.'",
-        }
 
-    def _summarize_dataset(self) -> Dict[str, object]:
-        df = load_assets()
-        summary = summarize_assets(df)
-        row_count = summary.get("rows", 0)
-        columns = summary.get("columns", [])
-        message = (
-            f"The working dataset currently contains {row_count} ledger rows "
-            f"across columns {', '.join(columns[:8])}."
+    @staticmethod
+    def _explain_periods() -> str:
+        return (
+            "Periods are normalized strings: months like '2025-M03', quarters like '2025-Q1', and years like '2025'. "
+            "Users mention a time range, and the system filters rows whose month/quarter/year fields match that string."
         )
-        return {
-            "topic": "dataset_overview",
-            "message": message,
-            "columns": columns,
-            "rows": row_count,
-            "next_actions": "Ask for a P&L, price comparison, or property detail to drill into the data.",
-        }
 
-    def _capabilities_overview(self) -> Dict[str, object]:
+    @staticmethod
+    def _summarize_dataset() -> str:
+        return (
+            "The dataset is a ledger table where each row is a signed transaction with entity, property, tenant, "
+            "ledger hierarchy columns, and period labels (month, quarter, year). It powers every specialist agent."
+        )
+
+    @staticmethod
+    def _capabilities_overview() -> str:
         bullets: List[str] = [
-            "Compare two properties if valuation data is available.",
-            "Compute P&L at the portfolio, property, or tenant level.",
-            "Retrieve the latest snapshot for any property in the dataset.",
-            "Explain ledger codes or summarize the dataset structure.",
+            "Explain how revenues vs expenses roll into NOI.",
+            "Clarify how ledger groups identify parking, rent, or discounts.",
+            "Describe how P&L calculations rely on the signed profit column.",
+            "Outline how months ('2025-M03') and quarters ('2025-Q1') drive filtering.",
         ]
-        return {
-            "topic": "capabilities_overview",
-            "message": "Here's what I can help with inside the Cortex asset manager.",
-            "capabilities": bullets,
-            "next_actions": "Try: 'What is the total P&L for 2025?' or 'Tell me about Building 180.'",
-        }
+        return "Key concepts:\n- " + "\n- ".join(bullets)
 
     @staticmethod
     def _extract_ledger_code(user_input: str) -> str | None:

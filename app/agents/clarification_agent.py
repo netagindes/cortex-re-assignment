@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence
 
 from app.agents.request_types import RequestType, normalize_request_type
+from app.prompts.clarification_prompt import CLARIFICATION_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,12 @@ logger = logging.getLogger(__name__)
 class ClarificationAgent:
     """
     Generates clarifying follow-up prompts.
+
+    The `SYSTEM_PROMPT` attribute exposes the canonical clarification rules so the agent can
+    eventually be run as an LLM node without duplicating prompt text elsewhere.
     """
+
+    SYSTEM_PROMPT: str = CLARIFICATION_SYSTEM_PROMPT
 
     def run(
         self,
@@ -44,7 +50,7 @@ class ClarificationAgent:
         suggestions: Optional[List[str]] = None,
     ) -> str:
         reasons = reasons or []
-        targeted_reasons = [reason for reason in reasons if reason not in {"period", "granularity"}]
+        targeted_reasons = [reason for reason in reasons if reason not in {"period", "granularity", "comparison_periods", "property_selection"}]
 
         reason_text = ""
         if targeted_reasons:
@@ -60,10 +66,16 @@ class ClarificationAgent:
 
         period_prompt = None
         granularity_prompt = None
+        comparison_prompt = None
+        property_selection_prompt = None
         if "period" in reasons:
             period_prompt = "Which period would you like (month, quarter, or year)?"
         if "granularity" in reasons:
             granularity_prompt = "Do you want tenant-level, property-level, or combined totals?"
+        if "comparison_periods" in reasons:
+            comparison_prompt = "Which two periods would you like to compare?"
+        if "property_selection" in reasons:
+            property_selection_prompt = "Comparison requires a single property. Which property should I analyze?"
 
         if request_type == RequestType.PRICE_COMPARISON:
             return (
@@ -81,7 +93,7 @@ class ClarificationAgent:
                 f"{suggestion_block}"
             )
         if request_type == RequestType.PNL:
-            prompts = [prompt for prompt in (period_prompt, granularity_prompt) if prompt]
+            prompts = [prompt for prompt in (property_selection_prompt, period_prompt, granularity_prompt, comparison_prompt) if prompt]
             if not prompts:
                 prompts.append("Specify the time frame (year, quarter, or month) and optionally a property or tenant.")
             return (
