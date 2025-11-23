@@ -16,6 +16,12 @@ class QueryContext:
     user_input: str
     request_type: str
     addresses: List[str] = field(default_factory=list)
+    suggested_addresses: List[str] = field(default_factory=list)
+    address_matches: List[Dict[str, Any]] = field(default_factory=list)
+    candidate_terms: List[str] = field(default_factory=list)
+    unresolved_terms: List[str] = field(default_factory=list)
+    missing_addresses: List[str] = field(default_factory=list)
+    notes: List[str] = field(default_factory=list)
     period: Optional[str] = None
     period_level: Optional[str] = None
     entity_name: Optional[str] = None

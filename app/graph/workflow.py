@@ -6,10 +6,11 @@ from __future__ import annotations
 
 import re
 
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from langgraph.graph import END, StateGraph
 
+from app import tools
 from app.agents import (
     AssetDetailsAgent,
     ClarificationAgent,
@@ -64,6 +65,12 @@ def _classify_node(state: GraphState) -> GraphState:
     decision = supervisor.analyze(state.context.user_input)
     state.context.request_type = decision.request_type
     state.context.addresses = decision.addresses
+    state.context.suggested_addresses = decision.suggested_addresses
+    state.context.address_matches = decision.address_matches
+    state.context.candidate_terms = decision.candidate_terms
+    state.context.unresolved_terms = decision.unresolved_terms
+    state.context.missing_addresses = decision.missing_addresses
+    state.context.notes = decision.notes
     state.context.period = decision.period
     state.context.period_level = decision.period_level
     state.context.entity_name = decision.entity_name
@@ -91,20 +98,37 @@ def _route_from_supervisor(state: GraphState) -> str:
 
 def _price_node(state: GraphState) -> GraphState:
     addresses = state.context.addresses or []
+    suggestions = state.context.suggested_addresses or []
+    missing_addresses = state.context.missing_addresses or []
     state.log("Price comparison node entered", addresses=addresses)
+    if not tools.has_price_data():
+        message = _build_price_capability_message()
+        state.result = {"message": message}
+        state.log("Price comparison skipped - missing price data")
+        return state
+    if len(addresses) < 2 and missing_addresses:
+        state.result = {"message": _build_missing_property_message(missing_addresses, suggestions)}
+        state.log("Price comparison skipped - properties not in dataset", missing=missing_addresses)
+        return state
     if len(addresses) < 2:
-        state.result = {
-            "message": (
-                "Please mention two properties (e.g., Building 120 and Building 160) "
-                "so I can compare their values."
-            )
-        }
+        state.result = {"message": _build_price_prompt(suggestions)}
         state.log("Price comparison skipped due to insufficient addresses")
         return state
     try:
         state.result = price_agent.run(addresses[0], addresses[1])
     except ValueError as exc:
-        state.result = {"message": str(exc)}
+        fallback = _attempt_price_fallback(state, str(exc))
+        if fallback:
+            state.result = fallback
+            state.log(
+                "Price comparison fallback succeeded",
+                property_a=fallback["property_a"]["address"],
+                property_b=fallback["property_b"]["address"],
+            )
+            return state
+        state.result = {
+            "message": _build_price_error_message(str(exc), suggestions, missing_addresses=missing_addresses)
+        }
         state.log("Price comparison failed", error=str(exc))
         return state
     state.log(
@@ -200,10 +224,94 @@ def _clarification_node(state: GraphState) -> GraphState:
         state.context.user_input,
         request_type=state.context.request_type,
         reasons=state.context.clarification_reasons,
+        suggestions=state.context.suggested_addresses,
     )
     state.log("Clarification prompt generated")
     return state
 
 
 __all__ = ["build_workflow"]
+
+
+def _build_price_prompt(suggestions: List[str]) -> str:
+    base = (
+        "Please mention two properties (e.g., Building 120 and Building 160) "
+        "so I can compare their values."
+    )
+    if suggestions:
+        preview = " or ".join(suggestions[:2]) if len(suggestions) > 1 else suggestions[0]
+        return f"{base} Try {preview}."
+    return base
+
+
+def _build_price_error_message(error: str, suggestions: List[str], *, missing_addresses: List[str]) -> str:
+    message = f"I couldn't compare those properties: {error}"
+    if missing_addresses:
+        message += f" These locations are not in the dataset: {', '.join(missing_addresses)}."
+    if suggestions:
+        message += f" You can reference {', '.join(suggestions[:2])} instead."
+    return message
+
+
+def _attempt_price_fallback(state: GraphState, error_message: str) -> Optional[Dict[str, Any]]:
+    addresses = list(state.context.addresses or [])
+    if len(addresses) < 1:
+        return None
+    matches = state.context.address_matches or []
+    if not matches:
+        return None
+
+    missing = _extract_missing_address(error_message)
+    candidate_addresses: List[str] = []
+    for entry in matches:
+        addr = entry.get("address")
+        if addr and addr not in candidate_addresses:
+            candidate_addresses.append(addr)
+
+    fallback_pool = [addr for addr in candidate_addresses if addr not in addresses]
+    for alternative in fallback_pool:
+        new_pair = list(addresses)
+        if len(new_pair) < 2:
+            new_pair.append(alternative)
+        else:
+            replace_idx = 0
+            if missing and missing in new_pair:
+                replace_idx = new_pair.index(missing)
+            elif len(new_pair) > 1:
+                replace_idx = 1
+            new_pair[replace_idx] = alternative
+        if len(new_pair) < 2:
+            continue
+        try:
+            result = price_agent.run(new_pair[0], new_pair[1])
+        except ValueError:
+            continue
+        swapped = missing or "an unresolved property"
+        result["note"] = (
+            f"Used {alternative} instead of {swapped} because the original address "
+            "didn't match the dataset."
+        )
+        return result
+    return None
+
+
+def _extract_missing_address(error_message: str) -> Optional[str]:
+    match = re.search(r"Address '(.+?)' not found", error_message)
+    if match:
+        return match.group(1)
+    return None
+
+
+def _build_missing_property_message(missing: List[str], suggestions: List[str]) -> str:
+    base = f"I couldn't find these properties in the dataset: {', '.join(missing)}."
+    if suggestions:
+        base += f" Try {', '.join(suggestions[:2])} instead."
+    return base
+
+
+def _build_price_capability_message() -> str:
+    return (
+        "Property valuation data isn't included in the current dataset, so I can't compare prices. "
+        "I can still summarize P&L or other metrics if that helps."
+    )
 

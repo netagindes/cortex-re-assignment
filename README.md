@@ -10,6 +10,7 @@ real_estate_agent/
 │   ├── agents/                 # Supervisor + specialized agents
 │   ├── api/                    # FastAPI service entrypoint
 │   ├── graph/                  # State objects and LangGraph workflow
+│   ├── knowledge/              # Property memory + retrieval helpers
 │   ├── ui/                     # Streamlit entrypoint
 │   ├── config.py               # Paths, environment helpers
 │   ├── data_layer.py           # Access to assets.parquet
@@ -60,7 +61,9 @@ docker compose up --build
 
 ## Current Capabilities
 
-- **Supervisor routing** extracts property, tenant, and period hints (year / quarter / month) and keeps track of any missing requirements so the clarification agent can ask targeted follow-ups.
+- **Supervisor routing** now couples a hybrid intent parser (rules + optional OpenAI JSON parsing) with a TF-IDF/embedding property memory layer. It recognizes comparison connectors (“vs.”, “compared to”), resolves fuzzy property mentions, and surfaces concrete suggestions whenever the user omits a second property or provides noisy addresses.
+- **Property validation & fallbacks** combine alias/dictionary extraction with the property-memory search so natural-language mentions (“123 Main St”) are validated against the dataset immediately. If an address is missing, the supervisor now replies with “not in portfolio” plus concrete alternatives instead of asking the user to retype the request.
+- **Capability guardrails** detect when the dataset cannot satisfy a request (e.g., property prices are not tracked) and respond with an explicit explanation rather than looping on missing addresses.
 - **PnL agent** performs structured filtering (entity/property/tenant + time frames) and returns revenue, expenses, and net operating income using the ledger hierarchy contained in `assets.parquet`.
 - **Clarification agent** produces contextual prompts (e.g., “Please share two property names …”) whenever the supervisor detects missing information.
 - **API metadata**: every `/chat` response includes the original logs plus a metadata payload so clients/diagnostics UIs can display structured summaries without reparsing text.
@@ -70,7 +73,10 @@ docker compose up --build
 
 ## Configuration
 
-- **Environment variables**: store API keys inside `.env` (loaded by `app/config.py`). The sample project only requires `OPENAI_API_KEY` if you intend to swap the naive router for an LLM.
+- **Environment variables**: store API keys inside `.env` (loaded by `app/config.py`).
+  - `OPENAI_API_KEY` enables the optional intent-parser LLM and richer property embeddings. When absent, the supervisor falls back to deterministic heuristics.
+  - `SUPERVISOR_INTENT_MODEL` (optional) selects the chat model used for JSON intent parsing. Defaults to `gpt-4o-mini`.
+  - `OPENAI_EMBEDDINGS_MODEL` (optional) selects the embedding model for property memory. Defaults to `text-embedding-3-small`.
 - **Address aliases**: if you want to map natural-language addresses (e.g., “123 Main St”) to portfolio names (“Building 120”), create a JSON file such as:
 
   ```json
@@ -80,7 +86,7 @@ docker compose up --build
   }
   ```
 
-  Then point `ADDRESS_ALIAS_FILE` to it (or place it at `data/address_aliases.json`). The supervisor will automatically use the supplied mapping while still supporting fuzzy matches against known property names.
+  Then point `ADDRESS_ALIAS_FILE` to it (or place it at `data/address_aliases.json`). The supervisor ingests these aliases into the retrieval index so both literal matching and semantic search benefit from the mapping. When an address still cannot be found, the workflow responds with guidance (“not in dataset”) plus a short list of known properties.
 
 ## Testing & Quality Gates
 

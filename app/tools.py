@@ -5,6 +5,7 @@ Shared utility functions and tool abstractions used across agents.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from difflib import get_close_matches
 from functools import lru_cache
@@ -14,6 +15,7 @@ import pandas as pd
 
 from app.config import load_address_aliases
 from app.data_layer import load_assets
+from app.knowledge import PropertyMatch, PropertyMemoryResult, get_property_memory
 
 
 # --------------------------------------------------------------------------------------
@@ -35,6 +37,115 @@ def build_response_payload(result: Any, metadata: Dict[str, Any] | None = None) 
 # --------------------------------------------------------------------------------------
 # Supervisor helper utilities
 # --------------------------------------------------------------------------------------
+
+
+def search_properties(text: str, top_k: int = 5) -> List[PropertyMatch]:
+    """
+    Wrapper around PropertyMemory.search for callers that only need the ranked matches.
+    """
+
+    memory = get_property_memory()
+    return memory.search(text, top_k=top_k)
+
+
+@dataclass
+class PropertyResolution:
+    matches: List[PropertyMatch] = field(default_factory=list)
+    candidate_terms: List[str] = field(default_factory=list)
+    unresolved_terms: List[str] = field(default_factory=list)
+    missing_assets: List[str] = field(default_factory=list)
+
+
+def resolve_property_mentions(text: str, max_matches: int = 2) -> PropertyMemoryResult:
+    """
+    Resolve natural-language property mentions into dataset-backed matches.
+    """
+
+    memory = get_property_memory()
+    return memory.resolve_mentions(text, expected=max_matches)
+
+
+def resolve_properties(text: str, max_matches: int = 2) -> PropertyResolution:
+    """
+    Hybrid resolver combining alias/literal extraction with PropertyMemory lookups
+    and validating each candidate against the dataset.
+    """
+
+    memory = get_property_memory()
+    memory_result = memory.resolve_mentions(text, expected=max_matches * 2)
+    candidate_terms = list(memory_result.candidate_terms)
+    unresolved_terms = list(memory_result.unresolved_terms)
+    missing_assets: List[str] = []
+    matches: List[PropertyMatch] = []
+    seen: set[str] = set()
+
+    def _append(match: PropertyMatch, reason: Optional[str] = None) -> None:
+        address = (match.address or "").strip()
+        if not address:
+            return
+        key = address.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        updated = match if reason is None else replace(match, reason=reason)
+        matches.append(replace(updated, rank=len(matches) + 1))
+
+    alias_hits = extract_addresses(text, max_matches=max_matches * 2)
+    for alias in alias_hits:
+        if alias not in candidate_terms:
+            candidate_terms.append(alias)
+        try:
+            record = _lookup_asset(alias)
+        except ValueError:
+            missing_assets.append(alias)
+            continue
+        metadata = _record_metadata(record)
+        match = PropertyMatch(
+            address=str(record.get("address") or alias),
+            property_name=str(record.get("property_name") or record.get("address") or alias),
+            confidence=1.0,
+            rank=0,
+            reason="Alias or direct match",
+            metadata=metadata,
+        )
+        _append(match)
+
+    for match in memory_result.matches:
+        _append(match)
+
+    candidate_terms = list(dict.fromkeys(candidate_terms))
+    unresolved_terms.extend(missing_assets)
+    return PropertyResolution(
+        matches=matches[:max_matches],
+        candidate_terms=candidate_terms,
+        unresolved_terms=unresolved_terms,
+        missing_assets=missing_assets,
+    )
+
+
+def suggest_alternative_properties(
+    *,
+    exclude: Sequence[str] | None = None,
+    limit: int = 3,
+) -> List[str]:
+    """
+    Provide user-friendly property names for clarification prompts.
+    """
+
+    memory = get_property_memory()
+    excluded = {item.lower() for item in (exclude or []) if item}
+    suggestions: List[str] = []
+
+    for record in memory.records:
+        label = record.property_name or record.address
+        if not label:
+            continue
+        if label.lower() in excluded:
+            continue
+        suggestions.append(label)
+        if len(suggestions) >= limit:
+            break
+    return suggestions
 
 
 @lru_cache(maxsize=1)
@@ -222,6 +333,22 @@ def _lookup_asset(address_query: str, df: Optional[pd.DataFrame] = None) -> pd.S
     if match.empty:
         raise ValueError(f"Address '{address_query}' not found.")
     return match.iloc[0]
+
+
+def _record_metadata(record: pd.Series) -> Dict[str, Optional[str]]:
+    metadata: Dict[str, Optional[str]] = {}
+    for field in ("city", "state", "tenant_name"):
+        if field in record.index:
+            value = record[field]
+            if pd.notna(value):
+                metadata[field] = str(value)
+    return metadata
+
+
+@lru_cache(maxsize=1)
+def has_price_data() -> bool:
+    df = load_assets(columns=["price"])
+    return "price" in df.columns
 
 
 # --------------------------------------------------------------------------------------
@@ -560,6 +687,11 @@ def explain_ledger_code(code: str) -> str:
 __all__ = [
     "format_currency",
     "build_response_payload",
+    "search_properties",
+    "resolve_property_mentions",
+    "resolve_properties",
+    "suggest_alternative_properties",
+    "has_price_data",
     "extract_addresses",
     "extract_tenant_names",
     "extract_period_hint",

@@ -27,6 +27,12 @@ def test_price_query_without_prices_returns_message():
     assert "price" in state.result["message"].lower()
 
 
+def test_price_query_reports_capability_gap():
+    state = _invoke("What is the price of my asset at 123 Main St compared to the one at 456 Oak Ave?")
+    assert state.context.request_type == "price_comparison"
+    assert "valuation data" in state.result["message"].lower()
+
+
 def _invoke(message: str) -> GraphState:
     workflow = build_workflow()
     compiled = workflow.compile()
@@ -42,6 +48,12 @@ def _invoke(message: str) -> GraphState:
             user_input=context.get("user_input", message),
             request_type=context.get("request_type", "general"),
             addresses=list(context.get("addresses") or []),
+             suggested_addresses=list(context.get("suggested_addresses") or []),
+             address_matches=list(context.get("address_matches") or []),
+             candidate_terms=list(context.get("candidate_terms") or []),
+             unresolved_terms=list(context.get("unresolved_terms") or []),
+             missing_addresses=list(context.get("missing_addresses") or []),
+             notes=list(context.get("notes") or []),
             period=context.get("period"),
             period_level=context.get("period_level"),
             entity_name=context.get("entity_name"),
