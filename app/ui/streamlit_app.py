@@ -40,9 +40,10 @@ def main() -> None:
         if prompt:
             _append_message("user", prompt)
             with st.spinner("Contacting API..."):
-                reply, logs = _call_api(prompt)
+                reply, logs, markdown = _call_api(prompt)
             _append_message("assistant", reply)
             st.session_state.pipeline_logs = logs
+            st.session_state.pipeline_markdown = markdown
 
         with history_container:
             _render_chat_history()
@@ -51,7 +52,7 @@ def main() -> None:
         _render_log_panel()
 
 
-def _call_api(message: str) -> tuple[str, list[str]]:
+def _call_api(message: str) -> tuple[str, list[str], str | None]:
     try:
         with httpx.Client(timeout=30.0) as client:
             response = client.post(f"{API_URL}/chat", json={"message": message})
@@ -66,12 +67,12 @@ def _call_api(message: str) -> tuple[str, list[str]]:
                 logs = ["Processing steps are not available for this request."]
             if note:
                 logs.append(f"Note: {note}")
-            return base, logs
+            return base, logs, data.get("log_markdown")
     except httpx.RequestError as exc:
-        return (f"Failed to reach API: {exc}", [f"RequestError: {exc}"])
+        return (f"Failed to reach API: {exc}", [f"RequestError: {exc}"], None)
     except httpx.HTTPStatusError as exc:
         detail = f"API error {exc.response.status_code}: {exc.response.text}"
-        return (detail, [detail])
+        return (detail, [detail], None)
 
 
 def _render_log_panel() -> None:
@@ -79,6 +80,14 @@ def _render_log_panel() -> None:
     logs = st.session_state.get("pipeline_logs") or []
     if logs:
         st.code("\n".join(logs))
+        markdown = st.session_state.get("pipeline_markdown") or ""
+        if markdown:
+            st.download_button(
+                "Download pipeline trace",
+                data=markdown,
+                file_name="pipeline_logs.md",
+                mime="text/markdown",
+            )
     else:
         st.info("No logs yet. Submit a prompt to view the pipeline trace.")
 

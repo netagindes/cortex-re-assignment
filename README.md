@@ -59,6 +59,19 @@ docker compose up --build
 - Orchestrate agent behavior with LangGraph (coming online behind the API).
 - Provide a simple UI that communicates with a FastAPI service.
 
+## Requirement Coverage Snapshot
+
+The assignment's six mandatory requirements are mapped to code/tests inside `docs/requirements_trace.md`. Highlights:
+
+1. **Architecture & LangGraph**: Supervisor + specialist agents (price, P&L, asset details, general knowledge, clarification) live in `app/graph/workflow.py` and `app/agents/`.
+2. **Natural-language input**: Streamlit UI + FastAPI `/chat` accept free-form prompts, parsed by `app/agents/intent_parser.py`.
+3. **Processing pipeline**: `app/tools.py` extracts addresses, timeframes, tenants; `PnLAgent`/`PriceComparisonAgent`/`AssetDetailsAgent` perform calculations or data assembly.
+4. **Output clarity**: `_format_response` in `app/api/main.py` generates concise, type-aware answers.
+5. **Error handling**: Supervisor + ClarificationAgent detect missing info, `PnLAgent` returns friendly `no_data` messages, and price node explains dataset limits.
+6. **Documentation / reasoning trace**: README + `docs/requirements_trace.md` document design. Every log entry now carries `agent` + requirement tags, and the Streamlit UI lets you download the full pipeline trace as Markdown for audit/documentation purposes.
+
+> See `docs/requirements_trace.md` for the full trace matrix, phrase-to-agent mapping, and remaining gaps (e.g., general knowledge flow, structured fallback taxonomy).
+
 ## Current Capabilities
 
 - **Supervisor routing** now couples a hybrid intent parser (rules + optional OpenAI JSON parsing) with a TF-IDF/embedding property memory layer. It recognizes comparison connectors (“vs.”, “compared to”), resolves fuzzy property mentions, and surfaces concrete suggestions whenever the user omits a second property or provides noisy addresses.
@@ -110,6 +123,8 @@ python -m pytest
    Use Cursor's Evaluate flow (Cmd/Ctrl+Shift+E -> "Run eval from file") and point it at `tests/supervisor_tasks_evals.jsonl`. Each JSONL row feeds the Supervisor-only path and compares the normalized task to `"expected_task"`, catching intent-classification and period-resolution regressions without invoking the full chat loop.
 3. **Full chat experience (end-to-end)**  
    Run the same Evaluate command with `tests/pnl_chat_evals.jsonl`. Every entry asserts that the final answer includes all strings under `"expected_contains"`, protecting prompt copy, clarification quality, and numeric call-outs after model or prompt updates.
+4. **Request-type coverage**  
+   Use `tests/request_type_chat_evals.jsonl` to ensure each request type (price comparison, asset details, general knowledge, clarification) still returns the expected phrasing when invoked through the full workflow.
 
 These JSONL files are self-contained, so you can also import them into any evaluation harness that understands the `user_query`/`expected_contains` schema if you prefer to run them outside Cursor.
 

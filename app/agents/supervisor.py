@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from app import tools
 from app.agents.intent_parser import IntentParseResult, IntentParser
-from app.agents.request_types import RequestType
+from app.agents.request_types import RequestType, request_definition_for
 from app.knowledge import PropertyMatch
 
 logger = logging.getLogger(__name__)
@@ -37,6 +37,7 @@ class SupervisorDecision:
     year: Optional[int] = None
     quarter: Optional[str] = None
     month: Optional[str] = None
+    measurement_id: Optional[str] = None
 
 
 @dataclass
@@ -55,8 +56,9 @@ class SupervisorAgent:
     def analyze(self, user_input: str) -> SupervisorDecision:
         parse_result = self._parse(user_input)
         request_type = parse_result.request_type
+        definition = request_definition_for(request_type)
 
-        max_matches = 4 if request_type == "price_comparison" else 2
+        max_matches = 4 if request_type == RequestType.PRICE_COMPARISON else 2
         property_resolution = tools.resolve_properties(user_input, max_matches=max_matches)
         matches = property_resolution.matches
         primary_matches = matches[:2]
@@ -71,22 +73,25 @@ class SupervisorAgent:
         tenants = tools.extract_tenant_names(user_input)
 
         property_name = None
+        entity_name = parse_result.entity_name
         if primary_matches:
-            property_name = primary_matches[0].property_name or primary_matches[0].address
-        elif request_type in {"asset_details", "price_comparison"} and parse_result.address_terms:
+            primary = primary_matches[0]
+            property_name = primary.property_name or primary.address
+            entity_name = entity_name or primary.metadata.get("entity")
+        elif request_type in {RequestType.ASSET_DETAILS, RequestType.PRICE_COMPARISON} and parse_result.address_terms:
             property_name = parse_result.address_terms[0]
 
         tenant_name = parse_result.tenant_name or (tenants[0] if tenants else None)
         missing: List[str] = list(parse_result.missing_fields or [])
 
-        if request_type == "price_comparison" and len(addresses) < 2 and "second_property" not in missing:
+        if request_type == RequestType.PRICE_COMPARISON and len(addresses) < 2 and "second_property" not in missing:
             missing.append("second_property")
-        if request_type == "asset_details" and not addresses and "property" not in missing:
+        if request_type == RequestType.ASSET_DETAILS and not addresses and "property" not in missing:
             missing.append("property")
-        if request_type == "pnl" and not any([period, year, quarter, month]):
+        if request_type == RequestType.PNL and not any([period, year, quarter, month]):
             missing.append("period")
         granularity_required = (
-            request_type == "pnl"
+            request_type == RequestType.PNL
             and bool(property_name)
             and not tenant_name
             and (
@@ -108,7 +113,7 @@ class SupervisorAgent:
 
         logger.info(
             "Supervisor analysis: request_type=%s addresses=%s period=%s",
-            request_type,
+            request_type.value if isinstance(request_type, RequestType) else request_type,
             addresses,
             period,
         )
@@ -124,6 +129,7 @@ class SupervisorAgent:
             period=period,
             period_level=period_level,
             property_name=property_name,
+            entity_name=entity_name,
             tenant_name=tenant_name,
             tenant_candidates=tenants,
             missing_requirements=missing,
@@ -131,6 +137,7 @@ class SupervisorAgent:
             year=year,
             quarter=quarter,
             month=month,
+            measurement_id=definition.measurement_id,
         )
 
     def _suggest_addresses(self, matches: List[PropertyMatch], resolved: List[str]) -> List[str]:

@@ -18,16 +18,24 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     ChatOpenAI = None  # type: ignore
 
-from app.agents.request_types import RequestType
+from app.agents.request_types import (
+    PRIORITIZED_TYPES,
+    REQUEST_REGISTRY,
+    RequestType,
+    normalize_request_type,
+)
 
 logger = logging.getLogger(__name__)
 _INTENT_MODEL_ENV = "SUPERVISOR_INTENT_MODEL"
 _DEFAULT_INTENT_MODEL = "gpt-4o-mini"
 
-_PRICE_MARKERS = ("compare", "comparison", "price", "value", "worth", "valuation", "versus", "vs", "delta")
-_PNL_MARKERS = ("p&l", "pnl", "profit", "loss", "income", "statement", "ledger")
-_DETAIL_MARKERS = ("detail", "describe", "tell me about", "info", "information", "tenant", "occupancy")
 _COMPARISON_PATTERNS = [r"\bversus\b", r"\bvs\.?\b", r"compared to", r"against", r"between"]
+_MONTH_PATTERN = re.compile(
+    r"\b("
+    r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|"
+    r"aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?"
+    r")\b"
+)
 
 
 @dataclass
@@ -44,7 +52,7 @@ class IntentParseResult:
 
     def merge(self, payload: Dict[str, Any]) -> None:
         request_type = payload.get("request_type")
-        normalized_type = _normalize_request_type(request_type)
+        normalized_type = normalize_request_type(request_type)
         if normalized_type:
             self.request_type = normalized_type
 
@@ -96,20 +104,51 @@ class IntentParser:
     def _rules_only_parse(self, user_input: str) -> IntentParseResult:
         lowered = user_input.lower()
         tokens = lowered.split()
-        request_type: RequestType = "general"
+        request_type: RequestType = RequestType.GENERAL
+        general_definition = REQUEST_REGISTRY[RequestType.GENERAL]
+        general_hit = general_definition.matches_text(user_input)
+        general_question = bool(re.search(r"\b(what is|what does|meaning of|definition|explain)\b", lowered))
 
-        if any(marker in lowered for marker in _PRICE_MARKERS):
-            request_type = "price_comparison"
-        elif any(marker in lowered for marker in _PNL_MARKERS):
-            request_type = "pnl"
-        elif any(marker in lowered for marker in _DETAIL_MARKERS):
-            request_type = "asset_details"
-        elif len(tokens) < 4:
-            request_type = "clarification"
+        for candidate in PRIORITIZED_TYPES:
+            if candidate == RequestType.GENERAL:
+                continue
+            definition = REQUEST_REGISTRY[candidate]
+            if definition.triggers and definition.matches_text(user_input):
+                request_type = candidate
+                break
 
         address_terms = self._extract_address_terms(user_input)
+        property_like_terms = [
+            term
+            for term in address_terms
+            if re.search(r"\b(building|suite|unit|property)\b|\d{2,}", term, flags=re.IGNORECASE)
+        ]
         comparison_markers = [pat for pat in _COMPARISON_PATTERNS if re.search(pat, lowered)]
-        needs_clarification = request_type == "price_comparison" and len(address_terms) < 2
+        has_year = bool(re.search(r"\b20\d{2}\b", lowered))
+        has_month_reference = bool(_MONTH_PATTERN.search(lowered))
+        has_time_hint = has_year or bool(re.search(r"\bq[1-4]\b", lowered)) or bool(re.search(r"month|quarter|year", lowered)) or has_month_reference
+        has_asset_keyword = bool(property_like_terms) or bool(re.search(r"\b(building|property|tenant|unit)\b", lowered))
+        has_compare_marker = bool(comparison_markers)
+        has_price_keyword = any(word in lowered for word in ("price", "valuation", "worth", "value"))
+        has_pnl_keyword = any(word in lowered for word in ("p&l", "pnl", "profit", "loss", "income", "revenue", "expense", "net"))
+
+        if (
+            general_question
+            and not has_compare_marker
+            and not has_price_keyword
+            and not (has_pnl_keyword and has_time_hint)
+            and not has_asset_keyword
+        ):
+            request_type = RequestType.GENERAL
+        elif request_type in {RequestType.GENERAL, RequestType.CLARIFICATION} and general_hit:
+            request_type = RequestType.GENERAL
+        if len(tokens) < 4 and request_type == RequestType.GENERAL:
+            request_type = RequestType.CLARIFICATION
+
+        if request_type == RequestType.PRICE_COMPARISON and has_pnl_keyword and has_time_hint:
+            request_type = RequestType.PNL
+
+        needs_clarification = request_type == RequestType.PRICE_COMPARISON and len(address_terms) < 2
         missing = ["second_property"] if needs_clarification else []
 
         return IntentParseResult(
@@ -169,30 +208,6 @@ class IntentParser:
                 if normalized and normalized not in candidates:
                     candidates.append(normalized)
         return candidates[:4]
-
-
-def _normalize_request_type(value: Any) -> Optional[RequestType]:
-    mapping = {
-        "price_comparison": "price_comparison",
-        "price": "price_comparison",
-        "compare": "price_comparison",
-        "pnl": "pnl",
-        "p&l": "pnl",
-        "asset_details": "asset_details",
-        "details": "asset_details",
-        "clarification": "clarification",
-        "question": "clarification",
-        "general": "general",
-    }
-    if not value:
-        return None
-    lowered = str(value).strip().lower()
-    normalized = mapping.get(lowered)
-    if normalized in mapping.values():
-        return normalized  # type: ignore[return-value]
-    return None
-
-
 __all__ = ["IntentParser", "IntentParseResult"]
 
 

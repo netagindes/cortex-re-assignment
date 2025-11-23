@@ -98,6 +98,15 @@ def resolve_properties(text: str, max_matches: int = 2) -> PropertyResolution:
             record = _lookup_asset(alias)
         except ValueError:
             missing_assets.append(alias)
+            placeholder = PropertyMatch(
+                address=alias,
+                property_name=alias,
+                confidence=0.0,
+                rank=0,
+                reason="User provided address (not in dataset)",
+                metadata={},
+            )
+            _append(placeholder)
             continue
         metadata = _record_metadata(record)
         match = PropertyMatch(
@@ -116,7 +125,7 @@ def resolve_properties(text: str, max_matches: int = 2) -> PropertyResolution:
     candidate_terms = list(dict.fromkeys(candidate_terms))
     unresolved_terms.extend(missing_assets)
     return PropertyResolution(
-        matches=matches[:max_matches],
+        matches=matches,
         candidate_terms=candidate_terms,
         unresolved_terms=unresolved_terms,
         missing_assets=missing_assets,
@@ -224,7 +233,8 @@ def extract_addresses(text: str, max_matches: int = 2) -> List[str]:
 def extract_tenant_names(text: str, max_matches: int = 2) -> List[str]:
     lowered = text.lower()
     matches: List[str] = []
-    for tenant in _known_tenants():
+    tenants = sorted(_known_tenants(), key=lambda value: (-len(value), value))
+    for tenant in tenants:
         if tenant.lower() in lowered and tenant not in matches:
             matches.append(tenant)
             if len(matches) >= max_matches:
@@ -300,6 +310,13 @@ def extract_period_hint(text: str) -> Dict[str, Optional[str] | Optional[int]]:
         quarter = f"{year}-{quarter_suffix}"
         return build_response(label=quarter, level="quarter", year=year, quarter=quarter)
 
+    quarter_match_alt = re.search(r"(q[1-4])\s*(20\d{2})", lowered)
+    if quarter_match_alt:
+        quarter_suffix = quarter_match_alt.group(1).upper()
+        year = int(quarter_match_alt.group(2))
+        quarter = f"{year}-{quarter_suffix}"
+        return build_response(label=quarter, level="quarter", year=year, quarter=quarter)
+
     for name, code in _MONTH_MAP.items():
         if name in lowered:
             year_match = re.search(r"(20\d{2})", lowered)
@@ -337,7 +354,7 @@ def _lookup_asset(address_query: str, df: Optional[pd.DataFrame] = None) -> pd.S
 
 def _record_metadata(record: pd.Series) -> Dict[str, Optional[str]]:
     metadata: Dict[str, Optional[str]] = {}
-    for field in ("city", "state", "tenant_name"):
+    for field in ("entity", "city", "state", "tenant_name"):
         if field in record.index:
             value = record[field]
             if pd.notna(value):

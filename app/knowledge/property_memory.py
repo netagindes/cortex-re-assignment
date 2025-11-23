@@ -32,6 +32,7 @@ _DEFAULT_EMBED_MODEL = "text-embedding-3-small"
 class PropertyRecord:
     address: str
     property_name: Optional[str] = None
+    entity_name: Optional[str] = None
     city: Optional[str] = None
     state: Optional[str] = None
     tenant_name: Optional[str] = None
@@ -167,6 +168,7 @@ class PropertyMemory:
             if not address:
                 continue
             property_name = str(row.get("property_name") or "").strip() or None
+            entity = str(row.get("entity") or row.get("entity_name") or "").strip() or None
             city = str(row.get("city") or "").strip() or None
             state = str(row.get("state") or "").strip() or None
             tenant = str(row.get("tenant_name") or "").strip() or None
@@ -175,6 +177,7 @@ class PropertyMemory:
             document = self._compose_document(
                 address=address,
                 property_name=property_name,
+                entity_name=entity,
                 city=city,
                 state=state,
                 tenant=tenant,
@@ -186,6 +189,7 @@ class PropertyMemory:
                 PropertyRecord(
                     address=address,
                     property_name=property_name,
+                    entity_name=entity,
                     city=city,
                     state=state,
                     tenant_name=tenant,
@@ -241,6 +245,7 @@ class PropertyMemory:
         *,
         address: str,
         property_name: Optional[str],
+        entity_name: Optional[str],
         city: Optional[str],
         state: Optional[str],
         tenant: Optional[str],
@@ -250,6 +255,8 @@ class PropertyMemory:
         parts: List[str] = []
         if property_name and property_name.lower() != address.lower():
             parts.append(property_name)
+        if entity_name:
+            parts.append(entity_name)
         parts.append(address)
         if city or state:
             city_state = ", ".join(part for part in (city, state) if part)
@@ -345,6 +352,7 @@ class PropertyMemory:
                 "city": record.city,
                 "state": record.state,
                 "tenant_name": record.tenant_name,
+                "entity": record.entity_name,
             }
             confidence = max(0.0, min(1.0, round(score, 4)))
             matches.append(

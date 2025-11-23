@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Mapping, Tuple
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from app.agents.request_types import RequestType, normalize_request_type
 from app.graph.state import GraphState, QueryContext
 from app.graph.workflow import build_workflow
 from app.logging_utils import PipelineLogEntry, PipelineLogger, setup_logging
@@ -42,6 +43,7 @@ class ChatResponse(BaseModel):
     note: str | None = None
     logs: list[str] = Field(default_factory=list)
     metadata: Dict[str, Any] | None = None
+    log_markdown: str | None = None
 
 
 @app.get("/health", response_model=dict)
@@ -58,7 +60,7 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
     pipeline_logger = PipelineLogger("api.chat", context={"request_id": request_id})
     pipeline_logger.info("Received chat request", user_message=payload.message)
 
-    context = QueryContext(user_input=payload.message, request_type="general")
+    context = QueryContext(user_input=payload.message, request_type=RequestType.GENERAL)
     state = GraphState(context=context, logger=pipeline_logger)
 
     raw_state = compiled_workflow.invoke(state)
@@ -72,6 +74,7 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
         note=note,
         logs=pipeline_logger.as_text_lines(),
         metadata=metadata,
+        log_markdown=pipeline_logger.as_markdown(),
     )
 
 
@@ -91,7 +94,7 @@ def _ensure_graph_state(
     if isinstance(context, dict):
         try:
             user_input = context["user_input"]
-            request_type = context["request_type"]
+            request_type = normalize_request_type(context["request_type"])
         except KeyError as exc:
             raise ValueError("Workflow state context is missing required fields.") from exc
         context = QueryContext(
@@ -114,6 +117,7 @@ def _ensure_graph_state(
             month=context.get("month"),
             needs_clarification=bool(context.get("needs_clarification")),
             clarification_reasons=list(context.get("clarification_reasons") or []),
+            request_measurement=context.get("request_measurement"),
         )
     if not isinstance(context, QueryContext):
         raise TypeError("Workflow returned state without a valid context.")
@@ -150,10 +154,8 @@ def _format_response(state: GraphState) -> Tuple[str, str | None]:
         return ("I wasn't able to produce an answer. Please try rephrasing.", None)
 
     request_type = state.context.request_type
-    if "message" in result and len(result) == 1:
-        return result["message"], result.get("note")
 
-    if request_type == "price_comparison" and {"property_a", "property_b"} <= result.keys():
+    if request_type == RequestType.PRICE_COMPARISON and {"property_a", "property_b"} <= result.keys():
         lines: List[str] = []
         for key in ("property_a", "property_b"):
             entry = result[key]
@@ -164,7 +166,7 @@ def _format_response(state: GraphState) -> Tuple[str, str | None]:
         lines.append(diff_line)
         return ("\n".join(lines), result.get("note"))
 
-    if request_type == "pnl" and {"label", "formatted"} <= result.keys():
+    if request_type == RequestType.PNL and {"label", "formatted"} <= result.keys():
         lines = [f"{result['label']}: {result['formatted']}"]
         summary = result.get("totals_summary") or {}
         if summary:
@@ -180,7 +182,7 @@ def _format_response(state: GraphState) -> Tuple[str, str | None]:
                 lines.append(f"- {row['address']}: {format_currency(row['pnl'])}")
         return ("\n".join(lines), result.get("note"))
 
-    if request_type == "asset_details":
+    if request_type == RequestType.ASSET_DETAILS:
         pairs = []
         for field in ("address", "city", "state", "price", "pnl", "tenant_name"):
             if field in result:
@@ -191,6 +193,13 @@ def _format_response(state: GraphState) -> Tuple[str, str | None]:
         if not pairs:
             pairs = [f"{k}: {v}" for k, v in result.items()]
         return ("\n".join(pairs), result.get("note"))
+
+    if "message" in result:
+        note = result.get("note")
+        details = result.get("details")
+        if note is None and isinstance(details, str):
+            note = details
+        return result["message"], note
 
     return (
         "I wasn't able to match your request to a known operation. Please provide more details.",
@@ -203,8 +212,9 @@ def _build_metadata(state: GraphState) -> Dict[str, Any] | None:
     Provide a structured payload for UI/clients that want more than plain text.
     """
 
+    req_type = state.context.request_type.value if isinstance(state.context.request_type, RequestType) else state.context.request_type
     base: Dict[str, Any] = {
-        "request_type": state.context.request_type,
+        "request_type": req_type,
         "addresses": state.context.addresses,
         "suggested_addresses": state.context.suggested_addresses,
         "address_matches": state.context.address_matches,
@@ -220,6 +230,7 @@ def _build_metadata(state: GraphState) -> Dict[str, Any] | None:
         "year": state.context.year,
         "quarter": state.context.quarter,
         "month": state.context.month,
+        "request_measurement": state.context.request_measurement,
     }
 
     result = state.result

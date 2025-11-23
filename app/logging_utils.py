@@ -46,11 +46,19 @@ class PipelineLogEntry(BaseModel):
     timestamp: str
     level: str
     message: str
+    requirement_section: Optional[str] = None
+    agent: Optional[str] = None
     metadata: Dict[str, Any] | None = None
 
     def as_text(self) -> str:
-        suffix = f" | {self.metadata}" if self.metadata else ""
-        return f"{self.timestamp} [{self.level}] {self.message}{suffix}"
+        parts = [f"{self.timestamp} [{self.level}] {self.message}"]
+        if self.agent:
+            parts.append(f"agent={self.agent}")
+        if self.requirement_section:
+            parts.append(f"req={self.requirement_section}")
+        if self.metadata:
+            parts.append(str(self.metadata))
+        return " | ".join(parts)
 
 
 class PipelineLogger:
@@ -84,11 +92,16 @@ class PipelineLogger:
 
     def _log(self, level: int, message: str, metadata: Optional[Dict[str, Any]]) -> None:
         timestamp = datetime.now(timezone.utc).isoformat()
-        merged_metadata = {**self._context, **(metadata or {})} or None
+        meta = dict(metadata or {})
+        agent = meta.pop("agent", None)
+        requirement_section = meta.pop("requirement_section", None)
+        merged_metadata = {**self._context, **meta} or None
         entry = PipelineLogEntry(
             timestamp=timestamp,
             level=logging.getLevelName(level),
             message=message,
+            agent=agent or self._context.get("agent"),
+            requirement_section=requirement_section,
             metadata=merged_metadata,
         )
 
@@ -103,6 +116,22 @@ class PipelineLogger:
 
     def as_text_lines(self) -> List[str]:
         return [entry.as_text() for entry in self._entries]
+
+    def as_markdown(self) -> str:
+        if not self._entries:
+            return ""
+        lines: List[str] = []
+        for entry in self._entries:
+            meta_segments: List[str] = []
+            if entry.agent:
+                meta_segments.append(f"agent `{entry.agent}`")
+            if entry.requirement_section:
+                meta_segments.append(f"req `{entry.requirement_section}`")
+            if entry.metadata:
+                meta_segments.append(f"meta {entry.metadata}")
+            meta_text = f" ({' • '.join(meta_segments)})" if meta_segments else ""
+            lines.append(f"- `{entry.timestamp}` – **{entry.message}**{meta_text}")
+        return "\n".join(lines)
 
 
 __all__ = ["PipelineLogEntry", "PipelineLogger", "setup_logging"]

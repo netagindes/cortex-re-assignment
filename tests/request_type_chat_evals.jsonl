@@ -1,0 +1,5 @@
+{"id": "price_capability_gap", "request_type": "price_comparison", "user_query": "Compare Building 120 with Building 160.", "expected_contains": ["valuation data isn't included", "P&L"], "notes": "Ensures price-comparison path surfaces capability gap + fallback guidance."}
+{"id": "asset_detail_snapshot", "request_type": "asset_details", "user_query": "Tell me about Building 180.", "expected_contains": ["Building 180", "City"], "notes": "Asset details agent should return a snapshot with property metadata."}
+{"id": "general_pnl_definition", "request_type": "general", "user_query": "What does P&L mean?", "expected_contains": ["Profit & Loss", "net operating income"], "notes": "GeneralKnowledgeAgent should return conceptual guidance for P&L questions."}
+{"id": "clarification_missing_property", "request_type": "clarification", "user_query": "Compare my buildings.", "expected_contains": ["Please mention two property names", "Try"], "notes": "Clarification path should activate when user omits specific addresses."}
+
