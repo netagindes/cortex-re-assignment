@@ -143,11 +143,18 @@ def _price_node(state: GraphState) -> GraphState:
 def _pnl_node(state: GraphState) -> GraphState:
     state.log("PnL node entered", period=state.context.period)
     if state.context.request_type == "pnl" and state.context.needs_clarification:
-        state.result = {
-            "message": (
-                "I need the time period (year, quarter, or month) to calculate P&L. "
-                "For example: 'What is the total P&L for 2025?'"
+        reasons = set(state.context.clarification_reasons or [])
+        prompts: List[str] = []
+        if "period" in reasons:
+            prompts.append(
+                "Which period would you like (month, quarter, or year)? For example: 'What is the total P&L for 2025?'"
             )
+        if "granularity" in reasons:
+            prompts.append("Do you want tenant-level, property-level, or combined totals?")
+        if not prompts:
+            prompts.append("Please share the missing details so I can calculate the P&L.")
+        state.result = {
+            "message": " ".join(prompts)
         }
         state.log("PnL aggregation skipped - clarification required")
         return state

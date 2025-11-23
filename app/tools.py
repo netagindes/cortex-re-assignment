@@ -549,6 +549,11 @@ def compute_portfolio_pnl(
     if rows.empty:
         period_label = _resolve_period_label(label=label, year=year, quarter=quarter, month=month)
         subject = _describe_subject(property_name, tenant_name)
+        no_data_message = (
+            f"I couldn't find any financial data for {subject} during {period_label}. "
+            "Please double-check the property or timeframe, or specify whether you need "
+            "tenant-level, property-level, or combined totals."
+        )
         return {
             "status": "no_data",
             "label": f"Total P&L ({period_label})",
@@ -556,7 +561,7 @@ def compute_portfolio_pnl(
             "formatted": format_currency(0.0),
             "breakdown": [],
             "record_count": 0,
-            "message": f"No ledger data found for {subject} during {period_label}.",
+            "message": no_data_message,
             "filters": {k: v for k, v in filters.items() if v is not None},
         }
 

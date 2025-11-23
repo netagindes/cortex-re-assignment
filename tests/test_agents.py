@@ -38,6 +38,14 @@ def test_supervisor_pnl_leaves_property_blank():
     assert decision.property_name is None
 
 
+def test_supervisor_requires_granularity_for_yearly_property():
+    agent = SupervisorAgent()
+    decision = agent.analyze("Show me the yearly P&L for Building 180 for 2025.")
+    assert decision.request_type == "pnl"
+    assert "granularity" in decision.missing_requirements
+    assert decision.needs_clarification
+
+
 def test_supervisor_marks_missing_buildings():
     agent = SupervisorAgent()
     decision = agent.analyze("Compare Building 999 with Building 998")
@@ -58,6 +66,16 @@ def test_clarification_message_includes_suggestions():
     assert "Building 160" in response["message"]
 
 
+def test_clarification_pnl_granularity_prompt():
+    agent = ClarificationAgent()
+    response = agent.run(
+        "Need more info",
+        request_type="pnl",
+        reasons=["granularity"],
+    )
+    assert "tenant-level, property-level, or combined totals" in response["message"]
+
+
 def test_pnl_agent_year_totals():
     agent = PnLAgent()
     result = agent.run({"year": 2025})
@@ -66,4 +84,12 @@ def test_pnl_agent_year_totals():
     assert summary["total_revenue"] == pytest.approx(592124.15, rel=0, abs=0.01)
     assert summary["total_expenses"] == pytest.approx(2599.29, rel=0, abs=0.01)
     assert summary["net_operating_income"] == pytest.approx(589524.86, rel=0, abs=0.01)
+
+
+def test_pnl_agent_no_data_message_is_friendly():
+    agent = PnLAgent()
+    result = agent.run({"property_name": "Building 999", "year": 2025})
+    assert result["status"] == "no_data"
+    assert "couldn't find any financial data" in result["message"].lower()
+    assert "tenant-level, property-level, or combined totals" in result["message"]
 

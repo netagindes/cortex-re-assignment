@@ -102,6 +102,17 @@ Run the full suite with:
 python -m pytest
 ```
 
+### Layered Evaluation
+
+1. **Data logic (pytest)**  
+   Run `python -m pytest tests/test_pnl_aggregation.py` to ensure the `aggregate_pnl` pipeline still produces the expected monthly and quarterly NOI values whenever the parquet schema or ledger logic changes.
+2. **Agent behavior (Supervisor tasks)**  
+   Use Cursor's Evaluate flow (Cmd/Ctrl+Shift+E -> "Run eval from file") and point it at `tests/supervisor_tasks_evals.jsonl`. Each JSONL row feeds the Supervisor-only path and compares the normalized task to `"expected_task"`, catching intent-classification and period-resolution regressions without invoking the full chat loop.
+3. **Full chat experience (end-to-end)**  
+   Run the same Evaluate command with `tests/pnl_chat_evals.jsonl`. Every entry asserts that the final answer includes all strings under `"expected_contains"`, protecting prompt copy, clarification quality, and numeric call-outs after model or prompt updates.
+
+These JSONL files are self-contained, so you can also import them into any evaluation harness that understands the `user_query`/`expected_contains` schema if you prefer to run them outside Cursor.
+
 ## Sample Prompts
 
 You can try the following messages through the API or Streamlit UI:

@@ -85,6 +85,17 @@ class SupervisorAgent:
             missing.append("property")
         if request_type == "pnl" and not any([period, year, quarter, month]):
             missing.append("period")
+        granularity_required = (
+            request_type == "pnl"
+            and bool(property_name)
+            and not tenant_name
+            and (
+                period_level == "year"
+                or (year is not None and not quarter and not month)
+            )
+        )
+        if granularity_required and "granularity" not in missing:
+            missing.append("granularity")
 
         needs_clarification = bool(missing)
         serialized_matches = [self._serialize_match(match) for match in matches]

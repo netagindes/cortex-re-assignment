@@ -40,15 +40,25 @@ class ClarificationAgent:
         reasons: Optional[List[str]],
         suggestions: Optional[List[str]] = None,
     ) -> str:
+        reasons = reasons or []
+        targeted_reasons = [reason for reason in reasons if reason not in {"period", "granularity"}]
+
         reason_text = ""
-        if reasons:
-            friendly = ", ".join(reason.replace("_", " ") for reason in reasons)
+        if targeted_reasons:
+            friendly = ", ".join(reason.replace("_", " ") for reason in targeted_reasons)
             reason_text = f"I still need: {friendly}. "
 
         suggestion_text = ""
         if suggestions:
             preview = " or ".join(suggestions[:2]) if len(suggestions) > 1 else suggestions[0]
             suggestion_text = f" Try {preview}."
+
+        period_prompt = None
+        granularity_prompt = None
+        if "period" in reasons:
+            period_prompt = "Which period would you like (month, quarter, or year)?"
+        if "granularity" in reasons:
+            granularity_prompt = "Do you want tenant-level, property-level, or combined totals?"
 
         if request_type == "price_comparison":
             return (
@@ -64,9 +74,12 @@ class ClarificationAgent:
                 f"{suggestion_text}"
             )
         if request_type == "pnl":
+            prompts = [prompt for prompt in (period_prompt, granularity_prompt) if prompt]
+            if not prompts:
+                prompts.append("Specify the time frame (year, quarter, or month) and optionally a property or tenant.")
             return (
-                f"{reason_text}"
-                "Specify the time frame (year, quarter, or month) and optionally a property or tenant."
+                f"{reason_text}{' '.join(prompts)}"
+                f"{suggestion_text}"
             )
 
         return (
